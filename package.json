@@ -1,0 +1,49 @@
+{
+  "name": "blackboard-course-fetcher",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Local-first Blackboard course archiver and offline workspace for Ultra and Classic courses",
+  "author": "AgentMrCow",
+  "license": "MIT",
+  "homepage": "https://github.com/AgentMrCow/blackboard-course-fetcher#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AgentMrCow/blackboard-course-fetcher.git"
+  },
+  "bugs": {
+    "url": "https://github.com/AgentMrCow/blackboard-course-fetcher/issues"
+  },
+  "keywords": [
+    "blackboard",
+    "course-archive",
+    "offline-first",
+    "playwright",
+    "svelte"
+  ],
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "ci": "npm run check && npm test && npm run dashboard:build",
+    "dashboard": "node dashboard/server.js",
+    "dashboard:dev": "vite --config dashboard/vite.config.ts",
+    "dashboard:build": "vite build --config dashboard/vite.config.ts",
+    "docs:capture": "node test/capture-readme-tutorial.mjs",
+    "check": "npm run check:js && npm run check:client",
+    "check:js": "node scripts/check-js.js",
+    "check:client": "svelte-check --config dashboard/client/svelte.config.js --tsconfig dashboard/client/tsconfig.json",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "cheerio": "1.1.2",
+    "playwright": "^1.61.1"
+  },
+  "devDependencies": {
+    "@lucide/svelte": "^1.25.0",
+    "@sveltejs/vite-plugin-svelte": "^7.2.0",
+    "svelte": "^5.56.7",
+    "svelte-check": "^4.7.3",
+    "typescript": "^5.9.3",
+    "vite": "^8.1.5"
+  }
+}

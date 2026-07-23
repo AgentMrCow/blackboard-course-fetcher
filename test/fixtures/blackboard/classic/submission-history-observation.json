@@ -1,0 +1,31 @@
+{
+  "request": {
+    "id": "fixture-request",
+    "attemptId": "_attempt_fixture_1",
+    "url": "https://blackboard.example.edu/webapps/assignment/uploadAssignment?attempt_id=_attempt_fixture_1"
+  },
+  "anchors": [
+    {
+      "attemptId": "_attempt_fixture_1",
+      "fileId": "_file_fixture_1",
+      "fileName": "recorded-submission.pdf",
+      "url": "https://blackboard.example.edu/webapps/assignment/download?attempt_id=_attempt_fixture_1&file_id=_file_fixture_1"
+    },
+    {
+      "attemptId": "_attempt_fixture_1",
+      "fileId": "_file_fixture_1",
+      "fileName": "duplicate-name.pdf",
+      "url": "https://blackboard.example.edu/webapps/assignment/download?attempt_id=_attempt_fixture_1&file_id=_file_fixture_1"
+    },
+    {
+      "attemptId": "_different_attempt_1",
+      "fileId": "_file_fixture_2",
+      "fileName": "different-attempt.pdf",
+      "url": "https://blackboard.example.edu/webapps/assignment/download?attempt_id=_different_attempt_1&file_id=_file_fixture_2"
+    }
+  ],
+  "frames": [
+    "https://blackboard.example.edu/webapps/assignment/ordinary-frame",
+    "https://annotate.example/view?ticket=fixture-ticket"
+  ]
+}

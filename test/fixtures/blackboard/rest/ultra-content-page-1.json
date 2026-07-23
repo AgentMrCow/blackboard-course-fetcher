@@ -1,0 +1,21 @@
+{
+  "results": [
+    {
+      "id": "_content_folder_1",
+      "parentId": "ROOT",
+      "title": "Recorded folder",
+      "contentHandler": "resource/x-bb-folder",
+      "position": 0,
+      "visibility": "VISIBLE",
+      "state": "ACTIVE",
+      "modifiedDate": "2026-01-12T08:00:00.000Z",
+      "hasChildren": true
+    }
+  ],
+  "paging": {
+    "count": 2,
+    "limit": 1,
+    "offset": 0,
+    "nextPage": "/learn/api/v1/courses/_course_fixture_1/contents/ROOT/children?limit=1&offset=1"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "results": [
+    {
+      "id": "_attempt_fixture_1",
+      "status": "COMPLETED",
+      "attemptDate": "2026-02-03T09:15:00.000Z",
+      "exempt": false,
+      "overrideStatus": null
+    },
+    {
+      "id": "_attempt_fixture_2",
+      "status": "NEEDS_GRADING",
+      "attemptDate": "2026-02-04T10:30:00.000Z",
+      "exempt": false,
+      "overrideStatus": null
+    }
+  ],
+  "paging": {
+    "count": 2,
+    "limit": 100,
+    "offset": 0
+  }
+}

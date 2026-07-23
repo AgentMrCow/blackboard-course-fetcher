@@ -1,0 +1,29 @@
+{
+  "results": [
+    {
+      "id": "_content_file_1",
+      "parentId": "ROOT",
+      "title": "Recorded handout.pdf",
+      "contentHandler": "resource/x-bb-file",
+      "position": 1,
+      "visibility": "VISIBLE",
+      "state": "ACTIVE",
+      "modifiedDate": null,
+      "contentDetail": {
+        "resource/x-bb-file": {
+          "file": {
+            "fileName": "Recorded handout.pdf",
+            "mimeType": "application/pdf",
+            "size": 4096,
+            "url": "/bbcswebdav/xid-100001_1"
+          }
+        }
+      }
+    }
+  ],
+  "paging": {
+    "count": 2,
+    "limit": 1,
+    "offset": 1
+  }
+}

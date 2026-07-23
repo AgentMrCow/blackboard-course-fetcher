@@ -1,0 +1,14 @@
+* text=auto eol=lf
+
+*.gif binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.pdf binary
+*.zip binary
+
+dashboard/public/assets/* linguist-generated=true
+dashboard/public/assets/*.css binary
+dashboard/public/assets/*.js binary
+dashboard/public/assets/*.map binary

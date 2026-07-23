@@ -1,0 +1,44 @@
+# Authentication and environment files
+.blackboard-state.json
+*.state.json
+*.storage-state.json
+storage-state*.json
+auth.json
+.env
+.env.*
+!.env.example
+.npmrc
+!.npmrc.example
+playwright/.auth/
+
+# Local archives and runtime data
+Blackboard_Archive/
+_blackboard_fetch_test_*/
+.dashboard-data/
+.playwright-cli/
+test/artifacts/
+
+# Dependencies, caches, and reports
+node_modules/
+.cache/
+.vite/
+coverage/
+.nyc_output/
+
+# Logs and temporary files
+*.log
+*.pid
+*.tmp
+*.temp
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~

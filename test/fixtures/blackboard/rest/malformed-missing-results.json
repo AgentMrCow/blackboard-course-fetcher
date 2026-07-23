@@ -1,0 +1,8 @@
+{
+  "paging": {
+    "count": 1,
+    "limit": 100,
+    "offset": 0
+  },
+  "error": "The results property was omitted"
+}
