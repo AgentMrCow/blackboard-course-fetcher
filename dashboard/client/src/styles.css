@@ -2166,10 +2166,12 @@ kbd {
 }
 
 .task-row .course-avatar { width: 36px; height: 36px; }
+.task-title { min-width: 0; }
 .task-title strong,
 .task-title small { display: block; }
 .task-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .task-title small { margin-top: 4px; color: var(--ink-faint); font-size: 9.5px; }
+.task-title small.task-failure { color: var(--red); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
 
 .task-actions {
   display: flex;
@@ -2177,6 +2179,8 @@ kbd {
 }
 
 .log-panel {
+  display: flex;
+  flex-direction: column;
   position: sticky;
   top: calc(var(--topbar-height) + 20px);
   max-height: calc(100vh - 110px);
@@ -2190,6 +2194,7 @@ kbd {
 
 .log-panel header {
   display: flex;
+  flex-shrink: 0;
   min-height: 42px;
   padding: 0 11px;
   border-bottom: 1px solid #35423d;
@@ -2198,7 +2203,33 @@ kbd {
 }
 
 .log-panel header strong { font-size: 10.5px; }
+.log-failure {
+  flex-shrink: 0;
+  padding: 11px;
+  background: #382a27;
+  border-bottom: 1px solid #66433d;
+  color: #f0b4ae;
+  font-size: 10.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.log-failure p { margin: 4px 0 0; }
+.failure-details { margin-top: 8px; }
+.failure-details summary { cursor: pointer; font-size: 10px; }
+.failure-details summary:focus-visible { outline: 3px solid rgba(240, 180, 174, 0.4); outline-offset: 2px; }
+.failure-details pre {
+  max-height: 160px;
+  margin: 8px 0 0;
+  overflow: auto;
+  color: #dbe4e0;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 9px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .log-lines {
+  min-height: 0;
+  flex: 1;
   max-height: calc(100vh - 154px);
   padding: 10px 11px;
   overflow: auto;

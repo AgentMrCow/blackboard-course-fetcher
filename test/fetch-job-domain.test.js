@@ -51,3 +51,38 @@ test("batch completion waits for children and reports terminal task issues", () 
   assert.equal(transitionBatchAfterTaskExit({ ...running, tasks: [{ status: "incomplete" }] }, { activeChildren: 0, timestamp: TIMESTAMP }).status, "completed_with_issues");
   assert.equal(transitionBatchAfterTaskExit({ ...running, tasks: [{ status: "paused" }] }, { activeChildren: 0, timestamp: TIMESTAMP }).status, "paused");
 });
+
+test("specific failures survive exit while signals, success, pause, and cancellation take precedence", () => {
+  const failure = { code: "course-unavailable", message: "Course unavailable (HTTP 403)", details: "bb-rest-course-is-private" };
+  const task = { status: "running", failure };
+  const failed = transitionTaskAfterExit(task, { code: 1, signal: null, timestamp: TIMESTAMP });
+  assert.deepEqual(failed.failure, failure);
+  assert.equal(failed.currentItem, failure.message);
+  for (const desiredAfterExit of ["paused", "cancelled"]) {
+    const stopped = transitionTaskAfterExit({ ...task, desiredAfterExit }, { code: 1, signal: null, timestamp: TIMESTAMP });
+    assert.equal(stopped.status, desiredAfterExit);
+    assert.equal(stopped.failure, null);
+  }
+  const signalled = transitionTaskAfterExit(task, { code: null, signal: "SIGTERM", timestamp: TIMESTAMP });
+  assert.equal(signalled.failure, null);
+  assert.match(signalled.currentItem, /SIGTERM/);
+  assert.equal(transitionTaskAfterExit(task, { code: 0, signal: null, timestamp: TIMESTAMP }).failure, null);
+  assert.equal(transitionTaskAfterExit(task, { code: 2, signal: null, timestamp: TIMESTAMP }).failure, null);
+});
+
+test("restart reconciliation upgrades generic historical failures without changing retained archive results", () => {
+  const original = [{ status: "completed_with_issues", tasks: [{
+    status: "failed",
+    currentItem: "Fetcher exited with code 1",
+    result: { fileCount: 54, errors: 0, status: "complete" },
+    logs: [{ stream: "stderr", line: "Error: 403 Forbidden bb-rest-course-is-private" }],
+  }] }];
+  const result = reconcilePersistedBatches(original, TIMESTAMP);
+  const task = result.batches[0].tasks[0];
+  assert.equal(result.changed, true);
+  assert.equal(task.failure.code, "course-unavailable");
+  assert.match(task.currentItem, /Course unavailable/);
+  assert.deepEqual(task.result, original[0].tasks[0].result);
+  assert.equal(original[0].tasks[0].failure, undefined);
+  assert.equal(reconcilePersistedBatches(result.batches, TIMESTAMP).changed, false);
+});

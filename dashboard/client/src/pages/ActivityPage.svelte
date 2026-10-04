@@ -13,6 +13,7 @@
   $: if (current && !$appState.logTaskId) changeState((state) => state.logTaskId = current.tasks.find((task) => task.status === "running")?.id || current.tasks[0]?.id || null);
   $: logTask = jobs.flatMap((job) => job.tasks).find((task) => task.id === $appState.logTaskId) || null;
   $: logs = logTask?.logs || inventory?.logs || [];
+  $: failureMessage = logTask?.status === "failed" ? logTask.failure?.message || logTask.currentItem || "Fetch failed. Inspect the output below for more information." : "";
 
   function taskCommand(event: MouseEvent, batch: FetchBatch, task: FetchTask, action: string) {
     event.stopPropagation();
@@ -42,8 +43,8 @@
             {#each current.tasks as task}
               <div class="task-row" class:active={$appState.logTaskId === task.id} role="button" tabindex="0" onclick={() => changeState((state) => state.logTaskId = task.id)} onkeydown={(event) => { if (event.key === "Enter") changeState((state) => state.logTaskId = task.id); }}>
                 <CourseAvatar course={{ id: task.courseId, code: task.courseCode, name: task.courseName } as any} />
-                <div class="task-title"><strong>{task.courseName}</strong><small>{task.currentPhase} · {task.currentItem}</small></div>
-                <div class="task-progress"><div class="progress-track"><span class="progress-bar" style={`width:${task.progress}%`}></span></div><div class="progress-meta"><span>{task.progress}% · {titleCase(task.status)}</span><span>{task.remainingMs && !["completed", "incomplete", "failed", "cancelled"].includes(task.status) ? `${formatDuration(task.remainingMs)} remaining` : task.result ? `${task.result.fileCount || 0} files · ${task.result.errors || 0} errors` : ""}</span></div></div>
+                <div class="task-title"><strong>{task.courseName}</strong><small class:task-failure={task.status === "failed"}>{#if task.status === "failed"}{task.failure?.message || task.currentItem || "Fetch failed. Select this course to inspect its output."}{:else}{task.currentPhase} · {task.currentItem}{/if}</small></div>
+                <div class="task-progress"><div class="progress-track"><span class="progress-bar" style={`width:${task.progress}%`}></span></div><div class="progress-meta"><span>{task.progress}% · {titleCase(task.status)}</span><span>{task.status === "failed" ? task.result ? `${task.result.fileCount || 0} archived files · fetch failed` : "Fetch failed" : task.remainingMs && !["completed", "incomplete", "cancelled"].includes(task.status) ? `${formatDuration(task.remainingMs)} remaining` : task.result ? `${task.result.fileCount || 0} files · ${task.result.errors || 0} errors` : ""}</span></div></div>
                 <div class="task-actions">
                   {#if ["running", "queued"].includes(task.status)}
                     <button class="icon-button" onclick={(event) => taskCommand(event, current, task, "pause")} title="Pause course fetch" aria-label="Pause course fetch"><Icon name="pause" /></button><button class="icon-button danger" onclick={(event) => taskCommand(event, current, task, "cancel")} title="Cancel course fetch" aria-label="Cancel course fetch"><Icon name="x" /></button>
@@ -65,6 +66,20 @@
         <section class="term-section"><div class="section-heading"><h2>Earlier batches</h2></div><div class="data-surface"><div class="data-table-wrap"><table class="data-table"><thead><tr><th>Started</th><th>Mode</th><th>Courses</th><th>Status</th><th>Duration</th></tr></thead><tbody>{#each jobs.slice(1, 12) as job}<tr><td>{formatDate(job.startedAt || job.createdAt, { time: true })}</td><td>{titleCase(job.options.mode)}</td><td>{job.tasks.length}</td><td><StatusBadge status={job.status} /></td><td>{job.startedAt ? formatDuration(Date.parse(job.finishedAt || new Date().toISOString()) - Date.parse(job.startedAt)) : "-"}</td></tr>{/each}</tbody></table></div></div></section>
       {/if}
     </div>
-    <aside class="log-panel"><header><strong>{logTask ? `${logTask.courseCode} output` : "Operation output"}</strong><span class="badge neutral">{logs.length}</span></header><div class="log-lines">{#each logs as entry}<div class="log-line" class:stderr={entry.stream === "stderr"}><time>{new Date(entry.at).toLocaleTimeString("en-HK", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time>{entry.line}</div>{:else}<div class="log-line">Select a course task to inspect its recent output.</div>{/each}</div></aside>
+    <aside class="log-panel">
+      <header><strong>{logTask ? `${logTask.courseCode} output` : "Operation output"}</strong><span class="badge neutral">{logs.length}</span></header>
+      {#if failureMessage}
+        <div class="log-failure" role="status">
+          <strong>Fetch failed</strong>
+          <p>{failureMessage}</p>
+          {#if logTask?.failure?.details}
+            {#key logTask.id}
+              <details class="failure-details"><summary>Technical details</summary><pre>{logTask.failure.details}</pre></details>
+            {/key}
+          {/if}
+        </div>
+      {/if}
+      <div class="log-lines">{#each logs as entry}<div class="log-line" class:stderr={entry.stream === "stderr"}><time>{new Date(entry.at).toLocaleTimeString("en-HK", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time>{entry.line}</div>{:else}<div class="log-line">{logTask ? "No recent output for this course." : "Select a course task to inspect its recent output."}</div>{/each}</div>
+    </aside>
   </div>
 </div>

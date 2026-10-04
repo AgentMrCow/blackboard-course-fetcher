@@ -1,5 +1,6 @@
 const { EventEmitter } = require("events");
 const { httpError } = require("../../shared/http-error");
+const { describeFetchFailure } = require("../../domain/fetch-jobs/fetch-failure");
 const {
   ACTIVE_BATCH_STATES,
   PHASES,
@@ -146,6 +147,7 @@ class JobManager extends EventEmitter {
         transfer: { networkFiles: 0, networkBytes: 0, reusedFiles: 0, reusedBytes: 0, placeholderFiles: 0, unresolvedFiles: 0 },
         retryCount: 0,
         exitCode: null,
+        failure: null,
         logs: [],
         result: null,
         processPaused: false,
@@ -272,19 +274,24 @@ class JobManager extends EventEmitter {
       task.progress = 100;
       task.currentPhase = "Complete";
       task.currentItem = event.summary || "Archive written and audited";
+    } else if (event.type === "fatal") {
+      task.failure = describeFetchFailure(event.message);
+      task.currentPhase = "Failed";
+      task.currentItem = task.failure?.message || "Fetch failed";
     }
   }
 
   handleLine(batch, task, stream, rawLine) {
-    const line = cleanLogLine(rawLine);
-    if (!line) return;
-    if (line.startsWith(PROGRESS_PREFIX)) {
+    const raw = String(rawLine || "").trim();
+    if (!raw) return;
+    if (raw.startsWith(PROGRESS_PREFIX)) {
       try {
-        this.handleProgressEvent(task, JSON.parse(line.slice(PROGRESS_PREFIX.length)));
+        this.handleProgressEvent(task, JSON.parse(raw.slice(PROGRESS_PREFIX.length)));
       } catch {
-        this.log(task, stream, line);
+        this.log(task, stream, raw);
       }
     } else {
+      const line = cleanLogLine(raw);
       this.log(task, stream, line);
       const phase = line.match(/^phase ([A-Za-z]+):/);
       if (phase) this.handleProgressEvent(task, { type: "phase-end", phase: phase[1] });
@@ -314,28 +321,6 @@ class JobManager extends EventEmitter {
   startTask(batch, task) {
     const course = this.archiveService.getCourseRecord(task.courseId);
     const outputPath = this.archiveService.coursePath(course);
-    const child = this.processRunner.startFetch({
-      attachmentConcurrency: batch.options.attachmentConcurrency,
-      base: batch.runtime.base,
-      courseId: task.courseId,
-      courseName: task.courseName,
-      courseTerm: course.term?.sourceName || course.term?.name || "",
-      mode: batch.options.mode,
-      outputPath,
-      reuseValidatedCache: batch.options.reuseValidatedCache || task.retryCount > 0,
-      stateFile: batch.runtime.stateFile,
-    }, {
-      onError: (error) => {
-        this.log(task, "stderr", `Unable to start fetch: ${error.message}`);
-        this.schedulePersist();
-        this.emitUpdate();
-      },
-      onExit: (code, signal) => this.handleExit(batch, task, code, signal),
-      onStderr: (line) => this.handleLine(batch, task, "stderr", line),
-      onStdout: (line) => this.handleLine(batch, task, "stdout", line),
-    });
-    const key = this.processKey(batch.id, task.courseId);
-    this.children.set(key, child);
     task.status = "running";
     task.startedAt ||= this.nowIso();
     task.runStartedAt = this.nowIso();
@@ -349,7 +334,42 @@ class JobManager extends EventEmitter {
     task.currentPhase = "Starting";
     task.currentItem = "Connecting to Blackboard";
     task.exitCode = null;
+    task.failure = null;
     task.result = null;
+    let exited = false;
+    const onError = (error) => {
+      task.failure = describeFetchFailure(`Unable to start fetch: ${error.message}`);
+      task.currentItem = task.failure.message;
+      this.log(task, "stderr", task.failure.details);
+      this.schedulePersist();
+      this.emitUpdate();
+    };
+    const onExit = (code, signal) => {
+      exited = true;
+      this.handleExit(batch, task, code, signal);
+    };
+    try {
+      const child = this.processRunner.startFetch({
+        attachmentConcurrency: batch.options.attachmentConcurrency,
+        base: batch.runtime.base,
+        courseId: task.courseId,
+        courseName: task.courseName,
+        courseTerm: course.term?.sourceName || course.term?.name || "",
+        mode: batch.options.mode,
+        outputPath,
+        reuseValidatedCache: batch.options.reuseValidatedCache || task.retryCount > 0,
+        stateFile: batch.runtime.stateFile,
+      }, {
+        onError,
+        onExit,
+        onStderr: (line) => this.handleLine(batch, task, "stderr", line),
+        onStdout: (line) => this.handleLine(batch, task, "stdout", line),
+      });
+      if (!exited) this.children.set(this.processKey(batch.id, task.courseId), child);
+    } catch (error) {
+      onError(error);
+      onExit(1, null);
+    }
     this.schedulePersist();
     this.emitUpdate();
   }
@@ -378,7 +398,7 @@ class JobManager extends EventEmitter {
 
   pump(batchId) {
     const batch = this.getBatch(batchId);
-    if (batch.status === "paused" || batch.status === "cancelled") return;
+    if (batch.status === "paused" || TERMINAL_BATCH_STATES.has(batch.status)) return;
     if (!batch.runtime?.base || !batch.runtime?.stateFile) {
       batch.status = "failed";
       batch.finishedAt = this.nowIso();
@@ -459,6 +479,7 @@ class JobManager extends EventEmitter {
       } else if (["paused", "interrupted", "failed", "incomplete", "cancelled"].includes(task.status)) {
         task.status = "queued";
         task.retryCount += 1;
+        task.failure = null;
         task.finishedAt = null;
         task.currentPhase = "Queued for repair";
         task.currentItem = "Completed files will be hash-validated and reused";

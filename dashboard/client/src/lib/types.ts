@@ -63,6 +63,7 @@ export interface FetchTask extends JsonRecord {
   progress: number;
   currentPhase?: string;
   currentItem?: string;
+  failure?: { code: string; message: string; details: string } | null;
   logs: JsonRecord[];
 }
 

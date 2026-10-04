@@ -1,3 +1,5 @@
+const { failureFromTaskLogs } = require("./fetch-failure");
+
 const PHASES = [
   ["bootstrap", 4],
   ["announcements", 7],
@@ -20,6 +22,13 @@ function reconcilePersistedBatches(batches, timestamp) {
   let changed = false;
   const reconciled = (Array.isArray(batches) ? batches : []).map((batch) => {
     const tasks = (batch.tasks || []).map((task) => {
+      if (task.status === "failed" && !task.failure && /^Fetcher exited with code /.test(task.currentItem || "")) {
+        const failure = failureFromTaskLogs(task);
+        if (failure) {
+          changed = true;
+          return { ...task, failure, currentItem: failure.message };
+        }
+      }
       if (!["running", "pausing"].includes(task.status) && !(task.status === "paused" && task.processPaused)) {
         return { ...task };
       }
@@ -46,6 +55,7 @@ function transitionTaskAfterExit(task, { code, signal, timestamp }) {
     exitCode: Number.isInteger(code) ? code : null,
     finishedAt: timestamp,
     processPaused: false,
+    failure: null,
   };
   if (task.desiredAfterExit === "cancelled") {
     return {
@@ -82,11 +92,13 @@ function transitionTaskAfterExit(task, { code, signal, timestamp }) {
       currentItem: "Archive is usable; coverage audit reported gaps",
     };
   }
+  const failure = signal ? null : task.failure || failureFromTaskLogs(task);
   return {
     ...next,
     status: "failed",
     currentPhase: "Failed",
-    currentItem: signal ? `Process stopped by ${signal}` : `Fetcher exited with code ${code ?? "unknown"}`,
+    failure,
+    currentItem: signal ? `Process stopped by ${signal}` : failure?.message || `Fetcher exited with code ${code ?? "unknown"}`,
   };
 }
 
