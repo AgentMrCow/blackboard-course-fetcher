@@ -8,6 +8,14 @@ function ltiDetail(item) {
   return Object.entries(item?.contentDetail || {}).find(([key]) => isLtiHandler(key))?.[1] || null;
 }
 
+function requiresAssessmentArchive(item) {
+  const handler = item?.handler || item?.contentHandler || "";
+  if (handler === "resource/x-bb-assignment" || handler === "resource/x-bb-asmt-test-link") {
+    return true;
+  }
+  return isLtiHandler(handler) && Boolean(item?.gradingColumnId || ltiDetail(item)?.gradingColumn?.id);
+}
+
 function hostname(value) {
   if (!value) return null;
   try {
@@ -56,4 +64,5 @@ module.exports = {
   isLtiHandler,
   ltiDetail,
   ltiProviderHost,
+  requiresAssessmentArchive,
 };

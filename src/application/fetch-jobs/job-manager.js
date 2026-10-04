@@ -73,7 +73,7 @@ class JobManager extends EventEmitter {
   }
 
   activeBatch() {
-    return this.batches.find((batch) => ACTIVE_BATCH_STATES.has(batch.status));
+    return this.batches.find((batch) => ACTIVE_BATCH_STATES.has(batch.status) || this.runningCount(batch) > 0);
   }
 
   estimateDuration(course, mode) {
@@ -89,7 +89,11 @@ class JobManager extends EventEmitter {
   }
 
   createBatch(options) {
-    if (this.activeBatch()) {
+    const active = this.activeBatch();
+    if (active?.status === "cancelled") {
+      throw httpError(409, "Wait for cancelled course processes to stop before starting another batch");
+    }
+    if (active) {
       throw httpError(409, "Finish or cancel the active batch before starting another one");
     }
     const inventory = this.archiveService.getInventory();
@@ -446,6 +450,9 @@ class JobManager extends EventEmitter {
     const task = this.getTask(batch, courseId);
     if (action === "resume") {
       const otherActive = this.activeBatch();
+      if (otherActive?.status === "cancelled") {
+        throw httpError(409, "Wait for cancelled course processes to stop before resuming a fetch");
+      }
       if (otherActive && otherActive.id !== batch.id) {
         throw httpError(409, "Another fetch batch is active");
       }
@@ -475,6 +482,8 @@ class JobManager extends EventEmitter {
           task.pausedMs += this.nowMs() - Date.parse(task.pausedAt);
           task.pausedAt = null;
           task.currentPhase = task.completedPhases.at(-1) || "Working";
+          batch.status = "running";
+          batch.finishedAt = null;
         }
       } else if (["paused", "interrupted", "failed", "incomplete", "cancelled"].includes(task.status)) {
         task.status = "queued";
@@ -493,12 +502,14 @@ class JobManager extends EventEmitter {
         task.currentPhase = "Cancelled";
         task.currentItem = "No process is running";
       } else if (["running", "paused", "pausing"].includes(task.status)) {
+        const key = this.processKey(batch.id, task.courseId);
+        const child = this.children.get(key);
         task.desiredAfterExit = "cancelled";
         task.currentPhase = "Cancelling";
         if (task.processPaused) this.signalTask(batch, task, "SIGCONT");
         this.signalTask(batch, task, "SIGTERM");
         this.scheduler.delay(() => {
-          if (this.children.has(this.processKey(batch.id, task.courseId))) this.signalTask(batch, task, "SIGKILL");
+          if (child && this.children.get(key) === child) this.processRunner.signal(child, "SIGKILL");
         }, 5_000);
       }
     } else {
@@ -520,6 +531,9 @@ class JobManager extends EventEmitter {
       }
     } else if (action === "resume") {
       const otherActive = this.activeBatch();
+      if (otherActive?.status === "cancelled") {
+        throw httpError(409, "Wait for cancelled course processes to stop before resuming a fetch");
+      }
       if (otherActive && otherActive.id !== batch.id) {
         throw httpError(409, "Another fetch batch is active");
       }
@@ -531,7 +545,7 @@ class JobManager extends EventEmitter {
       this.scheduler.soon(() => this.pump(batch.id));
     } else if (action === "cancel") {
       batch.status = "cancelled";
-      batch.finishedAt = this.nowIso();
+      batch.finishedAt = this.runningCount(batch) ? null : this.nowIso();
       for (const task of batch.tasks.filter((item) => !TERMINAL_TASK_STATES.has(item.status))) {
         this.controlTask(batchId, task.courseId, "cancel");
       }

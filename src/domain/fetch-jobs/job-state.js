@@ -115,7 +115,7 @@ function transitionBatchAfterTaskExit(batch, { activeChildren, timestamp }) {
     next.status = "paused";
     return next;
   }
-  const hasIssues = tasks.some((task) => ["incomplete", "failed", "cancelled"].includes(task.status));
+  const hasIssues = tasks.some((task) => ["incomplete", "failed", "cancelled", "interrupted"].includes(task.status));
   next.status = hasIssues ? "completed_with_issues" : "completed";
   next.finishedAt = timestamp;
   return next;

@@ -182,6 +182,17 @@ raw payloads, archive writing, classification, manifest, and coverage policy.
 Neither composition module directly uses Playwright page or context APIs. Flags,
 archive schema, output, and the single-course worker protocol remain compatible.
 
+The filesystem layout allocator registers content IDs and their parent IDs before
+exports are written. It reserves previous allocations, compares names with
+case-insensitive Unicode normalization, and separates title collisions with ID
+suffixes. Coverage policy also detects legacy colliding paths and mislabeled
+attachment markers without rewriting old manifests when the dashboard opens.
+Transfer cache eligibility excludes placeholder, unresolved, and link-only
+records independently of size/hash validation. LTI assessment coverage requires
+a real grading column; ungraded tools still participate in LTI resource coverage.
+The LTI gateway follows bounded same-origin launch redirects and carries response
+cookies between them without forwarding Blackboard cookies to external providers.
+
 ## Runtime Data
 
 The archive is the durable source of downloaded course material:
@@ -226,6 +237,11 @@ composition root injects `JsonJobRepository`, `FileIndexCacheRepository`, and it
 four Node runners; the fetch-all composition root injects the CLI course runner.
 SQLite can therefore replace JSON behind the job repository contract without
 changing routes, CLI arguments, worker protocol, or archive output.
+Batch exclusivity includes live children even after cancellation is requested.
+Delayed kill escalation is tied to the original process identity, and interrupted
+tasks prevent a batch from reporting clean completion. Frontend file-list loads
+verify their filter/page generation, while preview loads verify their dialog
+identity before applying asynchronous results or errors.
 
 ## Refactoring Sequence
 

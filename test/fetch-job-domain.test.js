@@ -49,6 +49,7 @@ test("batch completion waits for children and reports terminal task issues", () 
   assert.equal(transitionBatchAfterTaskExit({ ...running, tasks: [{ status: "queued" }] }, { activeChildren: 0, timestamp: TIMESTAMP }).status, "running");
   assert.equal(transitionBatchAfterTaskExit(running, { activeChildren: 0, timestamp: TIMESTAMP }).status, "completed");
   assert.equal(transitionBatchAfterTaskExit({ ...running, tasks: [{ status: "incomplete" }] }, { activeChildren: 0, timestamp: TIMESTAMP }).status, "completed_with_issues");
+  assert.equal(transitionBatchAfterTaskExit({ ...running, tasks: [{ status: "completed" }, { status: "interrupted" }] }, { activeChildren: 0, timestamp: TIMESTAMP }).status, "completed_with_issues");
   assert.equal(transitionBatchAfterTaskExit({ ...running, tasks: [{ status: "paused" }] }, { activeChildren: 0, timestamp: TIMESTAMP }).status, "paused");
 });
 

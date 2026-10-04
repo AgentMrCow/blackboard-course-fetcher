@@ -181,6 +181,10 @@ Running or queued courses can be paused, resumed, or cancelled separately. On
 POSIX systems a running process is suspended in place. On Windows, pause stops
 the process and resume starts a repair run. Interrupted, failed, incomplete, and
 cancelled tasks resume with SHA-256 validated cache reuse.
+Cancellation keeps new batches blocked until the old course processes have
+actually exited, so a replacement fetch cannot write into the same archive at
+the same time. Resuming one paused course also resumes the batch; other paused
+courses stay paused. Interrupted courses count as issues, not completed work.
 
 The finished archive is available through course views for content, assessments,
 grades, announcements, calendar, discussions, messages, groups, achievements,
@@ -301,6 +305,8 @@ node bin/fetch-blackboard-all.js \
 This option checks every reused file locally. It intentionally skips remote
 freshness validation, so use a normal run when checking Blackboard for updated
 versions of existing files.
+Placeholder, unresolved, and link-only records are never reused as downloaded
+attachment bodies, including older marker records whose flags were lost.
 
 The single-course entry point accepts the same `--base`, `--course-id`, `--state`,
 `--output`, `--download-mode`, `--attachment-concurrency`, and
@@ -315,6 +321,25 @@ failed transfer. The coverage audit reuses hashes already verified during that
 run instead of rereading every managed file. Each course `manifest.json` and
 `README.md` records phase timings, transferred bytes, validated cache reuse, and
 the number of files reread by the final audit.
+
+### Fetch failures and repair
+
+Exit code 1 means the course worker stopped on a fatal error; it is not the
+underlying cause. Fetch activity shows a readable reason and retains the original
+error in its details. For example, Blackboard `403 Forbidden` with
+`bb-rest-course-is-private` means the course is unavailable to the current
+account. The course must become accessible again before retrying; refreshing the
+session alone cannot restore course permissions. Authentication redirects or
+expired-session errors instead require a fresh saved sign-in session. Exit code
+2 means the worker finished but its archive has errors or incomplete coverage.
+
+A failed retry retains the previous usable `manifest.json`; partial diagnostics
+are stored separately in `manifest.failed.json`. Existing Full-mode archives
+containing metadata markers instead of real attachments, or colliding content
+paths, are shown as incomplete with a repair explanation. Run a Full fetch with
+validated cache reuse to repair accessible files. Healthy binaries can be reused,
+but missing bodies must be downloaded again. Files already overwritten by an old
+path collision cannot be recovered locally from their manifest alone.
 
 ## Output Layout
 
@@ -354,6 +379,10 @@ Recognized outline, content, and library wrapper names are collapsed into their
 fixed categories. Every unrecognized top-level item is retained under
 `01_Course_Contents`. The optional Library category is last so its absence does
 not leave a gap among the standard archive areas.
+Different content IDs with identical, case-insensitive, or sanitized/truncated
+titles receive separate folders with stable content-ID suffixes. Children follow
+their parent's allocated folder, and a later refetch preserves those paths even
+if Blackboard returns the items in a different order.
 
 When an older archive is refreshed, the fetcher migrates the previous numbered
 directories before fetching so incremental runs do not leave duplicate layouts.

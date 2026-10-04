@@ -2,6 +2,7 @@ const {
   DEFAULT_PLACEHOLDER_REASON,
   evaluateReportedSize,
   finiteNumber,
+  isReusableFileDownload,
   needsPlaceholder,
   resolutionFields,
 } = require("../../domain/course-fetch/course-file-policy");
@@ -231,9 +232,10 @@ class CourseFileTransferService {
 
     let temporaryPath = null;
     try {
-      const previous =
+      const previousRecord =
         this.previousDownloadsBySource.get(file.url) ||
         this.previousDownloadsBySource.get(file.sourceUrl);
+      const previous = isReusableFileDownload(previousRecord) ? previousRecord : null;
       const previousPath = this.fileStore.previousLocalPath(previous);
       if (this.reuseValidatedCache && previousPath && previous?.sha256) {
         const size = this.fileStore.fileSize(previousPath);

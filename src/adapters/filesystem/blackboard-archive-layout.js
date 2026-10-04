@@ -86,12 +86,86 @@ function relativeDirectoryForItem(ancestors, title, ownDirectory = false) {
   return ownDirectory ? path.join(base, sanitizePart(title)) : base;
 }
 
-function createArchiveLayout(outputRoot) {
+function createArchiveLayout(outputRoot, { previousContents = [] } = {}) {
+  const root = path.resolve(outputRoot);
+  const directories = new Map();
+  const contexts = new Map();
+  const owners = new Map();
+  const previousById = new Map(previousContents.filter((item) => item?.id).map((item) => [item.id, item]));
+  const key = (directory) => directory.normalize("NFKC").toLowerCase();
+  const categories = new Set(Object.values(ARCHIVE_DIRECTORIES).map((directory) => key(path.join(root, directory))));
+
+  function previousDirectory(item) {
+    if (typeof item?.directory !== "string") return null;
+    const directory = path.resolve(root, item.directory.replace(/\\/g, "/"));
+    return directory.startsWith(`${root}${path.sep}`) ? directory : null;
+  }
+
+  // Reserve existing item paths before traversal so refetch order cannot change ownership.
+  for (const item of previousContents) {
+    const directory = previousDirectory(item);
+    if (!item?.id || !directory) continue;
+    if (categories.has(key(directory)) && item.handler === "resource/x-bb-file" && item.ownDirectory !== true) continue;
+    if (item.ownDirectory === false) continue;
+    if (item.ownDirectory !== true && item.handler === "resource/x-bb-file" && (
+      !item.parentId || key(directory) === key(previousDirectory(previousById.get(item.parentId)) || "")
+    )) continue;
+    if (!owners.has(key(directory))) owners.set(key(directory), item.id);
+  }
+
+  function itemDirectory(id, ownDirectory) {
+    const context = contexts.get(id);
+    if (!context) return null;
+    if (!ownDirectory) return context.base;
+    if (directories.has(id)) return directories.get(id);
+    let preferred = context.preferred;
+    const previous = previousDirectory(previousById.get(id));
+    const previousParent = previous && key(path.dirname(previous));
+    const hasCompatibleParent = previousParent === key(path.dirname(preferred)) ||
+      (context.category && previousParent === key(context.preferred));
+    if (previous && hasCompatibleParent && owners.get(key(previous)) === id) {
+      preferred = previous;
+    }
+    let directory = preferred;
+    if (owners.has(key(directory)) && owners.get(key(directory)) !== id) {
+      // Only the first item owns a canonical category; duplicate wrappers
+      // stay inside that category instead of sharing fixed-name body files.
+      if (context.category) preferred = path.join(preferred, sanitizePart(context.title));
+      const suffix = ` [${sanitizePart(id, "item", 40)}]`;
+      const basename = sanitizePart(path.basename(preferred), "item", 150 - suffix.length);
+      directory = path.join(path.dirname(preferred), `${basename}${suffix}`);
+      for (let index = 2; owners.has(key(directory)) && owners.get(key(directory)) !== id; index += 1) {
+        directory = path.join(path.dirname(preferred), `${basename}${suffix} (${index})`);
+      }
+    }
+    owners.set(key(directory), id);
+    directories.set(id, directory);
+    return directory;
+  }
+
   return {
     directoryForAncestors(ancestors) {
       return path.join(outputRoot, relativeDirectoryForAncestors(ancestors));
     },
-    directoryForItem(ancestors, title, ownDirectory = false) {
+    registerItem({ id, parentId = null, ancestors = [], title, ownDirectory = true, container = false }) {
+      if (!id) return path.join(root, relativeDirectoryForItem(ancestors, title, ownDirectory));
+      const parent = contexts.get(parentId);
+      const base = parent
+        ? itemDirectory(parentId, parent.ownDirectory)
+        : path.join(root, relativeDirectoryForAncestors(ancestors));
+      const category = ancestors.length === 0 && knownTopLevelDirectory(title);
+      contexts.set(id, {
+        base,
+        ownDirectory,
+        category: Boolean(category),
+        title,
+        preferred: category ? path.join(root, category) : path.join(base, sanitizePart(title)),
+      });
+      return itemDirectory(id, ownDirectory);
+    },
+    directoryForItem(ancestors, title, ownDirectory = false, id = null) {
+      const allocated = id && itemDirectory(id, ownDirectory);
+      if (allocated) return allocated;
       return path.join(outputRoot, relativeDirectoryForItem(ancestors, title, ownDirectory));
     },
   };

@@ -9,6 +9,8 @@ const {
 } = require("../../domain/course-fetch/blackboard-attachment-policy");
 
 const USER_AGENT = "Mozilla/5.0 Blackboard Archive Fetcher";
+const MAX_LAUNCH_REDIRECTS = 5;
+const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
 
 function setCookieHeaders(response) {
   if (typeof response?.headers?.getSetCookie === "function") {
@@ -32,8 +34,15 @@ class ResponseCookieJar {
     }
   }
 
-  header() {
-    return [...this.values].map(([name, value]) => `${name}=${value}`).join("; ");
+  header(savedCookieHeader = "") {
+    const values = new Map();
+    for (const pair of String(savedCookieHeader || "").split(";")) {
+      const separator = pair.indexOf("=");
+      if (separator <= 0) continue;
+      values.set(pair.slice(0, separator).trim(), pair.slice(separator + 1).trim());
+    }
+    for (const [name, value] of this.values) values.set(name, value);
+    return [...values].map(([name, value]) => `${name}=${value}`).join("; ");
   }
 }
 
@@ -127,25 +136,48 @@ class BlackboardLtiH5pGateway {
   }
 
   async loadLaunchForm({ detail, launchUrl }) {
-    const response = await this.client.request(
-      launchUrl,
-      {
-        redirect: "manual",
-        headers: {
-          Accept: "text/html,application/xhtml+xml",
-          Cookie: this.client.cookieHeaderFor(launchUrl),
-          "User-Agent": this.userAgent,
+    let pageUrl = new URL(launchUrl, this.base).toString();
+    let redirects = 0;
+    const visited = new Set();
+    const cookies = new ResponseCookieJar();
+    while (true) {
+      visited.add(pageUrl);
+      const response = await this.client.request(
+        pageUrl,
+        {
+          redirect: "manual",
+          headers: {
+            Accept: "text/html,application/xhtml+xml",
+            Cookie: cookies.header(this.client.cookieHeaderFor(pageUrl)),
+            "User-Agent": this.userAgent,
+          },
         },
-      },
-      "Blackboard LTI launch",
-      1
-    );
-    if (isBlackboardAuthenticationRedirect(response.url, this.base)) {
-      await response.body?.cancel().catch(() => {});
-      throw new Error("Blackboard LTI launch redirected to authentication");
+        "Blackboard LTI launch",
+        1
+      );
+      if (isBlackboardAuthenticationRedirect(response.url || pageUrl, this.base)) {
+        await response.body?.cancel().catch(() => {});
+        throw new Error("Blackboard LTI launch redirected to authentication");
+      }
+      cookies.absorb(response);
+      const location = response.headers.get("location");
+      if (REDIRECT_STATUS_CODES.has(response.status) && location) {
+        await response.body?.cancel().catch(() => {});
+        const nextUrl = new URL(location, pageUrl).toString();
+        if (isBlackboardAuthenticationRedirect(nextUrl, this.base)) {
+          throw new Error("Blackboard LTI launch redirected to authentication or outside Blackboard");
+        }
+        if (visited.has(nextUrl)) throw new Error("Blackboard LTI launch encountered a redirect loop");
+        if (redirects >= MAX_LAUNCH_REDIRECTS) {
+          throw new Error(`Blackboard LTI launch exceeded ${MAX_LAUNCH_REDIRECTS} redirects`);
+        }
+        redirects += 1;
+        pageUrl = nextUrl;
+        continue;
+      }
+      const html = await responseText(response, "Blackboard LTI launch");
+      return parseLtiLaunchForm(html, pageUrl, detail?.url);
     }
-    const html = await responseText(response, "Blackboard LTI launch");
-    return parseLtiLaunchForm(html, launchUrl, detail?.url);
   }
 
   async exportPackage({ actionUrl, bearer, cookies, exportUrl, referer, title }) {

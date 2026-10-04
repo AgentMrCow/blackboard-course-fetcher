@@ -28,6 +28,7 @@ const {
   buildLtiLaunchUrl,
   isLtiHandler,
   ltiDetail,
+  requiresAssessmentArchive,
 } = require("../domain/course-fetch/blackboard-lti-policy");
 const {
   renderH5pHtml,
@@ -387,7 +388,7 @@ function htmlPage(title, bodyHtml, meta = {}) {
   ].join("\n");
 }
 
-const archiveLayout = createArchiveLayout(OUT_ROOT);
+const archiveLayout = createArchiveLayout(OUT_ROOT, { previousContents: previousManifest?.contents || [] });
 const dirForAncestors = archiveLayout.directoryForAncestors;
 const dirForItem = archiveLayout.directoryForItem;
 
@@ -830,7 +831,7 @@ async function downloadFeedbackAttachments(attachments, dir, label, context) {
 async function saveCourseFile(item, ancestors) {
   const file = getFileDetail(item);
   if (!file) return;
-  const dir = dirForItem(ancestors, item.title, ancestors.length === 0);
+  const dir = dirForItem(ancestors, item.title, ancestors.length === 0, item.id);
   await downloadFile(
     {
       fileName: file.fileName || item.title,
@@ -847,7 +848,7 @@ async function saveBodyAttachments(item, ancestors, attachments = []) {
   if (isDocument(item) || getAssessmentDetail(item)) return;
   const html = item?.body?.displayText || item?.body?.rawText || "";
   if (attachments.length === 0) return;
-  const dir = dirForItem(ancestors, item.title, true);
+  const dir = dirForItem(ancestors, item.title, true, item.id);
   writeText(path.join(dir, "body.html"), htmlPage(`${item.title} body`, html), {
     origin: "blackboard-content-export",
     role: "content-body-rendered",
@@ -862,7 +863,7 @@ async function saveBodyAttachments(item, ancestors, attachments = []) {
 async function saveDocument(item, ancestors, attachments = []) {
   if (!isDocument(item)) return;
   const html = item?.body?.displayText || item?.body?.rawText || "";
-  const dir = dirForItem(ancestors, item.title, true);
+  const dir = dirForItem(ancestors, item.title, true, item.id);
   ensureDir(dir);
   const htmlPath = path.join(dir, "document.html");
   const textPath = path.join(dir, "document.txt");
@@ -893,7 +894,7 @@ async function saveDocument(item, ancestors, attachments = []) {
 async function saveExternalLink(item, ancestors) {
   const link = getExternalLinkDetail(item);
   if (!link?.url) return;
-  const dir = dirForItem(ancestors, item.title, true);
+  const dir = dirForItem(ancestors, item.title, true, item.id);
   ensureDir(dir);
   const url = absUrl(link.url);
   const title = sanitizePart(item.title, "link");
@@ -985,7 +986,7 @@ async function createLtiAssessment(item, ancestors, me, ltiRecord) {
     manifest.errors.push({ label: item.title, error: `LTI grade lookup: ${error.message}` });
   }
   const gradeSummary = summarizeGrade(grade, column.possible);
-  const dir = dirForItem(ancestors, item.title, true);
+  const dir = dirForItem(ancestors, item.title, true, item.id);
   const assessment = {
     title: item.title,
     contentHandler: item.contentHandler || null,
@@ -1074,7 +1075,7 @@ function writeLtiMetadata(item, detail, record, assessment) {
 async function saveLtiContent(item, ancestors, me) {
   if (!isLtiHandler(item?.contentHandler)) return;
   const detail = ltiDetail(item) || {};
-  const dir = dirForItem(ancestors, item.title, true);
+  const dir = dirForItem(ancestors, item.title, true, item.id);
   ensureDir(dir);
   const launchUrl = buildLtiLaunchUrl({
     base: BASE,
@@ -1546,7 +1547,7 @@ async function saveAssessment(item, ancestors, me, attachments = []) {
   const test = getAssessmentDetail(detail) || wrapper;
   const assessment = test.assessment || {};
   const column = test.gradingColumn || {};
-  const dir = dirForItem(ancestors, item.title, true);
+  const dir = dirForItem(ancestors, item.title, true, item.id);
   const instructions = assessment.instructions || detail.body || {};
   const instructionsHtml = instructions.displayText || instructions.rawText || "";
   const record = {
@@ -2528,10 +2529,7 @@ function auditCoverage() {
     manifest.ltiResources.map((item) => [item.contentId, item])
   );
   const incompleteLti = ltiItems.filter((item) => ltiByContentId.get(item.id)?.complete !== true);
-  const assessmentItems = manifest.contents.filter((item) =>
-    new Set(["resource/x-bb-asmt-test-link", "resource/x-bb-assignment"]).has(item.handler) ||
-    isLtiHandler(item.handler)
-  );
+  const assessmentItems = manifest.contents.filter(requiresAssessmentArchive);
   const assessmentContentIds = new Set(manifest.assessments.map((item) => item.contentId));
   const missingAssessments = assessmentItems.filter((item) => !assessmentContentIds.has(item.id));
 
@@ -2752,7 +2750,7 @@ function auditCoverage() {
   };
 }
 
-async function processItem(item, ancestors, me) {
+async function processItem(item, ancestors, me, parentId = null) {
   const apiAttachmentPromise = discoverContentApiAttachments(item);
   let detail = item;
   let detailLoaded = true;
@@ -2795,12 +2793,22 @@ async function processItem(item, ancestors, me) {
     inlineAttachments,
     attachmentDiscovery.attachments
   ).map(stabilizeAttachment);
+  const ownDirectory = handler !== "resource/x-bb-file" || ancestors.length === 0 || contentAttachments.length > 0;
+  const directory = archiveLayout.registerItem({
+    id: detail.id || item.id,
+    parentId: parentId || detail.parentId || item.parentId,
+    ancestors,
+    title,
+    ownDirectory,
+    container: isContainer(detail),
+  });
   const record = {
     id: detail.id || item.id || null,
-    parentId: detail.parentId || item.parentId || null,
+    parentId: parentId || detail.parentId || item.parentId || null,
     title,
     path: [...ancestors, title].join(" / "),
     handler,
+    gradingColumnId: getAssessmentDetail(detail)?.gradingColumn?.id || ltiDetail(detail)?.gradingColumn?.id || null,
     position: finiteNumber(detail.position ?? item.position),
     visibility: detail.visibility || item.visibility || null,
     state: detail.state || item.state || null,
@@ -2808,12 +2816,8 @@ async function processItem(item, ancestors, me) {
     detailLoaded,
     knownHandler: isKnownHandler(handler),
     container: isContainer(detail),
-    directory: path.relative(
-      OUT_ROOT,
-      handler === "resource/x-bb-file"
-        ? dirForItem(ancestors, title, ancestors.length === 0)
-        : dirForItem(ancestors, title, true)
-    ),
+    directory: path.relative(OUT_ROOT, directory),
+    ownDirectory,
     files: [],
     attachmentDiscovery: {
       attempted: attachmentDiscovery.attempted,
@@ -2863,7 +2867,7 @@ async function processItem(item, ancestors, me) {
     ensureDir(path.join(OUT_ROOT, record.directory));
   }
   for (const child of children || []) {
-    await processItem(child, ancestors.concat(title), me);
+    await processItem(child, ancestors.concat(title), me, record.id);
   }
 }
 

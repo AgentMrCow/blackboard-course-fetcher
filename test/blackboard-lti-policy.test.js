@@ -6,6 +6,7 @@ const {
   isLtiHandler,
   ltiDetail,
   ltiProviderHost,
+  requiresAssessmentArchive,
 } = require("../src/domain/course-fetch/blackboard-lti-policy");
 
 const BASE = "https://blackboard.example.edu";
@@ -36,6 +37,30 @@ test("LTI policy extracts provider details and detects H5P by domain or placemen
     true
   );
   assert.equal(isH5pLti({ actionUrl: "https://video.example.edu/launch" }), false);
+});
+
+test("assessment archive policy expects normal assessments and graded LTI tools only", () => {
+  for (const handler of ["resource/x-bb-assignment", "resource/x-bb-asmt-test-link"]) {
+    assert.equal(requiresAssessmentArchive({ contentHandler: handler }), true);
+    assert.equal(requiresAssessmentArchive({ handler }), true);
+  }
+  const ungradedTool = {
+    contentHandler: "resource/x-bb-bltiplacement-video",
+    contentDetail: { "resource/x-bb-bltiplacement-video": { url: "https://video.example.edu/launch" } },
+  };
+  assert.equal(requiresAssessmentArchive(ungradedTool), false);
+  assert.equal(requiresAssessmentArchive({ handler: "resource/x-bb-blti-link", gradingColumnId: null }), false);
+  assert.equal(requiresAssessmentArchive({ handler: "resource/x-bb-blti-link", gradingColumnId: "_grade_1" }), true);
+  assert.equal(requiresAssessmentArchive({
+    contentHandler: "resource/x-bb-blti-link",
+    contentDetail: { "resource/x-bb-blti-link": { gradingColumn: { id: "_grade_1" } } },
+  }), true);
+  assert.equal(requiresAssessmentArchive({
+    handler: "resource/x-bb-blti-link",
+    contentDetail: { "resource/x-bb-blti-link": { gradingColumn: { id: "_grade_1" } } },
+  }), true);
+  assert.equal(requiresAssessmentArchive({ handler: "resource/x-bb-document", gradingColumnId: "_grade_1" }), false);
+  assert.equal(requiresAssessmentArchive(null), false);
 });
 
 test("LTI launch URL uses Blackboard metadata and has a generic fallback", () => {

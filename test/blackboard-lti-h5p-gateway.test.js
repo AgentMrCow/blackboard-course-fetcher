@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const {
   BlackboardLtiH5pGateway,
+  ResponseCookieJar,
   parseLtiLaunchForm,
 } = require("../src/adapters/blackboard/blackboard-lti-h5p-gateway");
 
@@ -66,6 +67,104 @@ test("LTI form parser selects the signed POST form for the expected provider", (
   assert.equal(parsed.fields.oauth_signature, "one-time-signature");
 });
 
+test("LTI launch follows Blackboard redirects and resolves forms against the final page", async () => {
+  const requests = [];
+  const gateway = new BlackboardLtiH5pGateway({
+    base: BASE,
+    client: {
+      cookieHeaderFor: (url) => `session-for=${new URL(url).pathname}; JSESSIONID=old-session`,
+      request: async (url, options, label, attempts) => {
+        requests.push({ url, options, attempts });
+        if (requests.length === 1) {
+          return withUrl(new Response(null, {
+            status: 302,
+            headers: { location: "/webapps/lti/redirect", "set-cookie": "JSESSIONID=updated-session; Path=/; HttpOnly" },
+          }), url);
+        }
+        if (requests.length === 2) {
+          return withUrl(new Response(null, {
+            status: 303,
+            headers: { location: "forms/launch", "set-cookie": "launch-context=expected; Path=/webapps/; HttpOnly" },
+          }), url);
+        }
+        return withUrl(new Response(launchHtml("./provider")), url);
+      },
+    },
+  });
+
+  const form = await gateway.loadLaunchForm({ launchUrl: LAUNCH_URL, detail: null });
+
+  assert.deepEqual(requests.map((request) => request.url), [
+    LAUNCH_URL,
+    `${BASE}/webapps/lti/redirect`,
+    `${BASE}/webapps/lti/forms/launch`,
+  ]);
+  assert.equal(form.actionUrl, `${BASE}/webapps/lti/forms/provider`);
+  assert.equal(requests.every((request) => request.options.redirect === "manual" && request.attempts === 1), true);
+  assert.equal(requests[1].options.headers.Cookie, "session-for=/webapps/lti/redirect; JSESSIONID=updated-session");
+  assert.equal(requests[2].options.headers.Cookie, "session-for=/webapps/lti/forms/launch; JSESSIONID=updated-session; launch-context=expected");
+  assert.equal(requests[2].options.headers.Cookie.match(/JSESSIONID=/g).length, 1);
+});
+
+test("response cookie jar merges cookie names without changing saved state", () => {
+  const cookies = new ResponseCookieJar();
+  const response = new Response(null, { headers: { "set-cookie": "session=new=value; Path=/; HttpOnly" } });
+  cookies.absorb(response);
+  assert.equal(cookies.header("session=old; retained=yes"), "session=new=value; retained=yes");
+  assert.equal(cookies.header(), "session=new=value");
+});
+
+test("LTI launch does not follow redirects to login or other origins", async (context) => {
+  for (const location of ["/webapps/login", "https://sso.example.edu/authenticate", "https://video.example.edu/lti"]) {
+    await context.test(location, async () => {
+      const requests = [];
+      const gateway = new BlackboardLtiH5pGateway({
+        base: BASE,
+        client: {
+          cookieHeaderFor: () => "blackboard-session=expected",
+          request: async (url) => {
+            requests.push(url);
+            return withUrl(new Response(null, { status: 302, headers: { location } }), url);
+          },
+        },
+      });
+
+      await assert.rejects(
+        () => gateway.loadLaunchForm({ launchUrl: LAUNCH_URL, detail: null }),
+        /redirected to authentication or outside Blackboard/
+      );
+      assert.deepEqual(requests, [LAUNCH_URL]);
+    });
+  }
+});
+
+test("LTI launch rejects redirect loops and bounded redirect chains", async (context) => {
+  for (const loop of [true, false]) {
+    await context.test(loop ? "loop" : "limit", async () => {
+      const requests = [];
+      const gateway = new BlackboardLtiH5pGateway({
+        base: BASE,
+        client: {
+          cookieHeaderFor: () => "blackboard-session=expected",
+          request: async (url) => {
+            requests.push(url);
+            return withUrl(new Response(null, {
+              status: 302,
+              headers: { location: loop ? LAUNCH_URL : `/redirect/${requests.length}` },
+            }), url);
+          },
+        },
+      });
+
+      await assert.rejects(
+        () => gateway.loadLaunchForm({ launchUrl: LAUNCH_URL, detail: null }),
+        loop ? /redirect loop/ : /exceeded 5 redirects/
+      );
+      assert.equal(requests.length, loop ? 1 : 6);
+    });
+  }
+});
+
 test("HTTP H5P gateway reproduces the browser launch and package exchange", async () => {
   const requests = [];
   const client = {
@@ -73,7 +172,9 @@ test("HTTP H5P gateway reproduces the browser launch and package exchange", asyn
     request: async (url, options, label, attempts) => {
       requests.push({ url: String(url), options, label, attempts });
       if (String(url) === LAUNCH_URL) {
-        return withUrl(new Response(launchHtml(), { headers: { "content-type": "text/html" } }), LAUNCH_URL);
+        return withUrl(new Response(launchHtml(), {
+          headers: { "content-type": "text/html", "set-cookie": "blackboard-context=final-page; Path=/; HttpOnly" },
+        }), LAUNCH_URL);
       }
       if (String(url) === H5P_URL && options.headers["Content-Type"] === "application/x-www-form-urlencoded") {
         const response = new Response('<script src="/js/7177.js"></script>', {
@@ -121,6 +222,7 @@ test("HTTP H5P gateway reproduces the browser launch and package exchange", asyn
   });
   assert.equal(requests.length, 4);
   assert.equal(requests.every((request) => request.attempts === 1), true);
+  assert.equal(requests[1].options.headers.Cookie, undefined);
   assert.match(requests[2].options.headers.Cookie, /h5pcomsession=session-value/);
   assert.equal(requests[2].options.headers.Referer, "https://tenant.h5p.com/js/7177.js");
   assert.deepEqual(JSON.parse(requests[3].options.body), {

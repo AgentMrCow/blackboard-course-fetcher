@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const {
   evaluateReportedSize,
   finiteNumber,
+  isReusableFileDownload,
   isTextLikeFile,
   needsPlaceholder,
   resolutionFields,
@@ -55,6 +56,26 @@ test("reported-size policy preserves strict and accepted mismatch behavior", () 
       warning: "report.pdf: downloaded 41 bytes, while Blackboard metadata reports 42; valid attachment response retained",
     },
   });
+});
+
+test("cache reuse excludes attachment markers even when old manifests lost their flags", () => {
+  assert.equal(isReusableFileDownload(null), false);
+  for (const flag of ["placeholder", "unresolved", "linkOnly"]) {
+    assert.equal(isReusableFileDownload({ path: "files/lecture.pdf", [flag]: true }), false);
+  }
+  for (const field of ["path", "fileName"]) {
+    for (const filename of [
+      "lecture.pdf.placeholder.json",
+      "lecture.pdf.placeholder (2).json",
+      "lecture.pdf.UNRESOLVED (3).JSON",
+      "lecture.pdf.unresolved (legacy 2).json",
+    ]) {
+      assert.equal(isReusableFileDownload({ [field]: `files\\${filename}` }), false);
+    }
+  }
+  assert.equal(isReusableFileDownload({ path: "files/lecture.pdf", placeholder: false }), true);
+  assert.equal(isReusableFileDownload({ path: "files/data.json" }), true);
+  assert.equal(isReusableFileDownload({ path: "placeholder.json" }), true);
 });
 
 test("resolution fields remain absent unless a fallback method was used", () => {

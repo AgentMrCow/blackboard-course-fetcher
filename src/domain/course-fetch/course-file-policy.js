@@ -99,6 +99,20 @@ function needsPlaceholder(downloadMode, file) {
   return downloadMode === "placeholder" && !isTextLikeFile(file);
 }
 
+function isFileDownloadMarker(record) {
+  // Earlier manifests can omit these flags after mistakenly reusing a marker.
+  return [record?.path, record?.fileName].some((value) =>
+    /\.(?:placeholder|unresolved)(?: \((?:legacy )?\d+\))*\.json$/i.test(
+      fileNameParts(value).baseName
+    )
+  );
+}
+
+function isReusableFileDownload(record) {
+  return Boolean(record) && record.placeholder !== true && record.unresolved !== true &&
+    record.linkOnly !== true && !isFileDownloadMarker(record);
+}
+
 function evaluateReportedSize({ actualSize, allowMismatch, file, fileName, label }) {
   const reportedSize = finiteNumber(file.fileSize);
   if (reportedSize === null || reportedSize === actualSize) {
@@ -129,6 +143,8 @@ module.exports = {
   DEFAULT_PLACEHOLDER_REASON,
   evaluateReportedSize,
   finiteNumber,
+  isFileDownloadMarker,
+  isReusableFileDownload,
   isTextLikeFile,
   needsPlaceholder,
   resolutionFields,

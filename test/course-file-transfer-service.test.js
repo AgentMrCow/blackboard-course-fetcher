@@ -200,6 +200,161 @@ test("validated local cache reuse avoids a network request", async (context) => 
   assert.deepEqual(runtime.events[0].slice(0, 2), ["reused", existing]);
 });
 
+test("full transfers download real bodies instead of reusing marker or link records", async (context) => {
+  const cases = [
+    { name: "placeholder flag", filename: "lecture.pdf", fields: { placeholder: true } },
+    { name: "unresolved flag", filename: "lecture.pdf", fields: { unresolved: true } },
+    { name: "link-only flag", filename: "lecture.url", fields: { linkOnly: true } },
+    { name: "legacy placeholder path", filename: "lecture.pdf.placeholder.json", fields: {} },
+    { name: "legacy unresolved version", filename: "lecture.pdf.unresolved (2).json", fields: {} },
+    {
+      name: "legacy placeholder filename",
+      filename: "cached.json",
+      fields: { fileName: "lecture.pdf.placeholder (legacy 2).json" },
+    },
+  ];
+  for (const entry of cases) {
+    for (const allowSizeMismatch of [false, true]) {
+      await context.test(`${entry.name}, ${allowSizeMismatch ? "attachment" : "strict course file"}`, async (child) => {
+        const state = manifest();
+        const outputRoot = temporaryDirectory(child);
+        const directory = path.join(outputRoot, "files");
+        fs.mkdirSync(directory);
+        const existing = path.join(directory, entry.filename);
+        const markerBody = '{"placeholder":true,"reason":"body omitted"}';
+        fs.writeFileSync(existing, markerBody);
+        const sourceUrl = "https://blackboard.example.edu/files/lecture.pdf";
+        const previous = {
+          sourceUrl,
+          path: path.join("files", entry.filename),
+          sha256: crypto.createHash("sha256").update(markerBody).digest("hex"),
+          etag: '"marker-etag"',
+          lastModified: "Wed, 22 Jul 2026 10:00:00 GMT",
+          ...entry.fields,
+        };
+        const body = "%PDF-1.7\nactual lecture body";
+        const requests = [];
+        const runtime = service(child, {
+          client: {
+            cookieHeaderFor: () => "session=expected",
+            request: async (url, options) => {
+              requests.push(options);
+              if (options.headers["If-None-Match"] || options.headers["If-Modified-Since"]) {
+                return new Response(null, { status: 304 });
+              }
+              return new Response(body, { headers: { "content-type": "application/pdf" } });
+            },
+          },
+          manifest: state,
+          outputRoot,
+          previousDownloadsBySource: new Map([[sourceUrl, previous]]),
+          reuseValidatedCache: true,
+        });
+
+        const result = await runtime.service.transfer(
+          runtime.service.prepare({
+            fileName: "lecture.pdf",
+            fileSize: Buffer.byteLength(body) + (allowSizeMismatch ? 100 : 0),
+            url: sourceUrl,
+          }),
+          directory,
+          "Lecture",
+          { allowSizeMismatch }
+        );
+
+        assert.equal(requests.length, 1);
+        assert.equal(requests[0].headers["If-None-Match"], undefined);
+        assert.equal(requests[0].headers["If-Modified-Since"], undefined);
+        assert.notEqual(result, existing);
+        assert.equal(fs.readFileSync(result, "utf8"), body);
+        assert.equal(fs.readFileSync(existing, "utf8"), markerBody);
+        assert.equal(state.transfer.networkFiles, 1);
+        assert.equal(state.transfer.reusedFiles, 0);
+        assert.equal(state.downloads[0].sizeMismatchAccepted, allowSizeMismatch);
+        assert.equal(state.downloads[0].cacheValidated, undefined);
+        assert.deepEqual(runtime.events[0].slice(0, 2), ["downloaded", result]);
+      });
+    }
+  }
+});
+
+test("marker cache validators are ignored when local cache reuse is disabled", async (context) => {
+  const state = manifest();
+  const outputRoot = temporaryDirectory(context);
+  const directory = path.join(outputRoot, "files");
+  fs.mkdirSync(directory);
+  const existing = path.join(directory, "lecture.pdf.placeholder (2).json");
+  fs.writeFileSync(existing, '{"placeholder":true}');
+  const sourceUrl = "https://blackboard.example.edu/files/lecture.pdf";
+  const previous = {
+    sourceUrl,
+    path: path.relative(outputRoot, existing),
+    etag: '"marker-etag"',
+    lastModified: "Wed, 22 Jul 2026 10:00:00 GMT",
+  };
+  let headers;
+  const body = "%PDF-1.7\nactual body";
+  const runtime = service(context, {
+    client: {
+      cookieHeaderFor: () => "",
+      request: async (url, options) => {
+        headers = options.headers;
+        return new Response(
+          headers["If-None-Match"] ? null : body,
+          headers["If-None-Match"] ? { status: 304 } : { headers: { "content-type": "application/pdf" } }
+        );
+      },
+    },
+    manifest: state,
+    outputRoot,
+    previousDownloadsBySource: new Map([[sourceUrl, previous]]),
+  });
+
+  const result = await runtime.service.transfer(
+    runtime.service.prepare({ fileName: "lecture.pdf", url: sourceUrl }),
+    directory,
+    "Lecture",
+    { allowSizeMismatch: true }
+  );
+
+  assert.equal(headers["If-None-Match"], undefined);
+  assert.equal(headers["If-Modified-Since"], undefined);
+  assert.equal(fs.readFileSync(result, "utf8"), body);
+  assert.equal(state.transfer.reusedFiles, 0);
+});
+
+test("genuine cached binary files retain local reuse", async (context) => {
+  const state = manifest();
+  const outputRoot = temporaryDirectory(context);
+  const directory = path.join(outputRoot, "files");
+  fs.mkdirSync(directory);
+  const existing = path.join(directory, "lecture.pdf");
+  const body = "%PDF-1.7\nlecture body";
+  fs.writeFileSync(existing, body);
+  const sourceUrl = "https://blackboard.example.edu/files/lecture.pdf";
+  const runtime = service(context, {
+    manifest: state,
+    outputRoot,
+    previousDownloadsBySource: new Map([[sourceUrl, {
+      path: "files/lecture.pdf",
+      sha256: crypto.createHash("sha256").update(body).digest("hex"),
+      contentType: "application/pdf",
+    }]]),
+    reuseValidatedCache: true,
+  });
+
+  const result = await runtime.service.transfer(
+    runtime.service.prepare({ fileName: "lecture.pdf", fileSize: Buffer.byteLength(body), url: sourceUrl }),
+    directory,
+    "Lecture"
+  );
+
+  assert.equal(result, existing);
+  assert.equal(state.transfer.reusedFiles, 1);
+  assert.equal(state.transfer.networkFiles, 0);
+  assert.equal(state.downloads[0].contentType, "application/pdf");
+});
+
 test("conditional request reuses an integrity-checked 304 response", async (context) => {
   const state = manifest();
   const outputRoot = temporaryDirectory(context);

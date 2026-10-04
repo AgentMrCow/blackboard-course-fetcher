@@ -1,9 +1,10 @@
 import { api } from "./api";
 import { fileEndpoint } from "./format";
 import { appState, changeState, navigate, readState, routeFromHash, showToast } from "./state";
-import type { ArchiveFile, Bootstrap, CourseDetail, FetchBatch, FilePage, FileScope, JsonRecord, SearchResult } from "./types";
+import type { ArchiveFile, Bootstrap, CourseDetail, FetchBatch, FileDialogState, FilePage, FileScope, JsonRecord, SearchResult } from "./types";
 
 let events: EventSource | null = null;
+let fileLoadSequence = 0;
 
 export function activeBatch(bootstrap = readState().bootstrap): FetchBatch | null {
   return bootstrap?.jobs?.find((job) => ["queued", "running", "paused"].includes(job.status)) || null;
@@ -41,9 +42,8 @@ export async function refreshBootstrap(showSuccess = false): Promise<void> {
   if (showSuccess) showToast("Local archive data refreshed.", "success");
 }
 
-export async function loadAllFiles(force = false): Promise<void> {
+function fileListParameters(): URLSearchParams {
   const state = readState();
-  if (state.filesLoading || (state.allFiles && !force)) return;
   const params = new URLSearchParams({
     offset: String(state.filePage * state.filePageSize),
     limit: String(state.filePageSize),
@@ -52,12 +52,32 @@ export async function loadAllFiles(force = false): Promise<void> {
   if (state.fileFilters.preview !== "all") params.set("preview", state.fileFilters.preview);
   if (state.fileFilters.courseId) params.set("courseId", state.fileFilters.courseId);
   params.set("scope", state.fileFilters.scope);
+  return params;
+}
+
+export async function loadAllFiles(force = false): Promise<void> {
+  const state = readState();
+  if (!force && (state.filesLoading || state.allFiles)) return;
+  const sequence = ++fileLoadSequence;
   changeState((current) => current.filesLoading = true);
   try {
-    const page = await api<FilePage>(`/api/files?${params}`);
-    changeState((current) => current.allFiles = page);
+    while (sequence === fileLoadSequence) {
+      const params = fileListParameters().toString();
+      let page: FilePage;
+      try {
+        page = await api<FilePage>(`/api/files?${params}`);
+      } catch (error) {
+        if (sequence !== fileLoadSequence) return;
+        if (params !== fileListParameters().toString()) continue;
+        throw error;
+      }
+      if (sequence !== fileLoadSequence) return;
+      if (params !== fileListParameters().toString()) continue;
+      changeState((current) => current.allFiles = page);
+      return;
+    }
   } finally {
-    changeState((current) => current.filesLoading = false);
+    if (sequence === fileLoadSequence) changeState((current) => current.filesLoading = false);
   }
 }
 
@@ -116,7 +136,9 @@ export async function startFetch(payload: JsonRecord): Promise<void> {
     body: { ...payload, courseIds: state.fetchCourseIds },
   });
   changeState((current) => {
-    current.bootstrap?.jobs.unshift(batch);
+    if (current.bootstrap && !current.bootstrap.jobs.some((job) => job.id === batch.id)) {
+      current.bootstrap.jobs.unshift(batch);
+    }
     current.selectedCourses.clear();
     current.fetchOpen = false;
   });
@@ -221,8 +243,9 @@ function fileMeta(courseId: string, filePath: string): ArchiveFile {
 
 export async function openFile(courseId: string, filePath: string): Promise<void> {
   const file = fileMeta(courseId, filePath);
+  const dialog: FileDialogState = { open: true, loading: true, courseId, file, text: "", parsed: null, link: "", error: "" };
   changeState((state) => {
-    state.fileDialog = { open: true, loading: true, courseId, file, text: "", parsed: null, link: "", error: "" };
+    state.fileDialog = dialog;
     state.detailDialog.open = false;
   });
   if (!["text", "json", "link", "placeholder", "unresolved"].includes(file.preview)) {
@@ -231,6 +254,7 @@ export async function openFile(courseId: string, filePath: string): Promise<void
   }
   try {
     const response = await fetch(fileEndpoint(courseId, filePath));
+    if (readState().fileDialog !== dialog || !dialog.open) return;
     if (!response.ok) throw new Error(`Unable to read file: HTTP ${response.status}`);
     let text = await response.text();
     let parsed: JsonRecord | null = null;
@@ -243,9 +267,15 @@ export async function openFile(courseId: string, filePath: string): Promise<void
       }
     }
     const link = file.preview === "link" ? text.match(/^URL=(.+)$/im)?.[1]?.trim() || "" : "";
-    changeState((state) => Object.assign(state.fileDialog, { loading: false, text, parsed, link }));
+    changeState((state) => {
+      if (state.fileDialog === dialog && dialog.open) Object.assign(dialog, { loading: false, text, parsed, link });
+    });
   } catch (error) {
-    changeState((state) => Object.assign(state.fileDialog, { loading: false, error: error instanceof Error ? error.message : String(error) }));
+    changeState((state) => {
+      if (state.fileDialog === dialog && dialog.open) {
+        Object.assign(dialog, { loading: false, error: error instanceof Error ? error.message : String(error) });
+      }
+    });
   }
 }
 
