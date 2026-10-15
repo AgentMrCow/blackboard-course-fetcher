@@ -16,6 +16,8 @@ export interface Course extends JsonRecord {
   termName: string;
   view: string;
   available: boolean;
+  archiveOnly?: boolean;
+  membershipPresent?: boolean;
   outputDirectory: string;
   archive: ArchiveStatus;
 }

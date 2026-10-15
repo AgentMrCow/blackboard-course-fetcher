@@ -91,6 +91,26 @@ test("archive query service builds course, summary, file, and search views witho
   assert.equal(service.search("proposition")[0].path, "01_Course_Contents/notes.txt");
 });
 
+test("archive query service uses an optional batch announcement reader and retains date sorting", (context) => {
+  const repository = memoryArchiveRepository();
+  const manifest = repository.loadManifest();
+  manifest.announcements = [
+    { id: "older", postedAt: "2026-07-20T00:00:00.000Z" },
+    { id: "newer", createdDate: "2026-07-22T00:00:00.000Z" },
+  ];
+  const batchReader = context.mock.fn((course, announcements) => {
+    assert.equal(course.id, "_1_1");
+    return announcements.map((announcement) => ({ ...announcement, text: `Batch ${announcement.id}`, htmlPath: null }));
+  });
+  repository.loadAnnouncements = batchReader;
+  repository.loadAnnouncement = () => assert.fail("the batch reader should replace per-item reads");
+  const service = new ArchiveService({ archiveRepository: repository });
+
+  assert.deepEqual(service.getCourse("_1_1").announcements.map((item) => item.text), ["Batch newer", "Batch older"]);
+  assert.equal(batchReader.mock.callCount(), 1);
+  assert.deepEqual(manifest.announcements.map((item) => item.id), ["older", "newer"]);
+});
+
 test("archive query service accepts only matching external file indexes", () => {
   const service = new ArchiveService({ archiveRepository: memoryArchiveRepository() });
   assert.equal(service.setFileIndex({ archiveRoot: "/other", courses: {} }), false);
@@ -102,6 +122,20 @@ test("archive query service accepts only matching external file indexes", () => 
     bytes: 0,
   }), true);
   assert.deepEqual(service.listFiles("_1_1"), []);
+});
+
+test("recovered assessment definitions do not imply an unsubmitted attempt", () => {
+  const repository = memoryArchiveRepository();
+  const manifest = repository.loadManifest();
+  const definition = { title: "Recovered assignment", dueDate: "2026-07-24T01:00:00.000Z" };
+  manifest.assessments = [
+    { ...definition, recovery: { attemptHistoryUnavailable: true } },
+    { ...definition, recovery: { attemptHistoryUnavailable: true }, grade: { status: "GRADED" } },
+    { ...definition },
+  ];
+  const service = new ArchiveService({ archiveRepository: repository });
+  assert.deepEqual(service.getCourse("_1_1").assessments.map((item) => item.status), ["UNKNOWN", "GRADED", "NOT_STARTED"]);
+  assert.deepEqual(service.summary().deadlines.map((item) => item.status), ["UNKNOWN", "GRADED", "NOT_STARTED"]);
 });
 
 test("archive queries hide support artifacts by default and deduplicate derived search results", () => {

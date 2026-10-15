@@ -260,6 +260,11 @@ class JobManager extends EventEmitter {
   }
 
   handleProgressEvent(task, event) {
+    // Phase/final snapshots include transfers made by browser and external-link
+    // fallbacks that do not emit individual file events.
+    if (event.transfer && typeof event.transfer === "object") {
+      task.transfer = { ...task.transfer, ...event.transfer };
+    }
     if (event.type === "phase-start") {
       task.currentPhase = event.phase || "Working";
       task.phaseStartedAt = this.nowIso();
@@ -273,7 +278,6 @@ class JobManager extends EventEmitter {
       if (event.phase) task.currentPhase = event.phase;
     } else if (event.type === "transfer") {
       task.currentItem = event.path || event.label || task.currentItem;
-      if (event.transfer) task.transfer = { ...task.transfer, ...event.transfer };
     } else if (event.type === "done") {
       task.progress = 100;
       task.currentPhase = "Complete";
@@ -322,9 +326,15 @@ class JobManager extends EventEmitter {
     return batch.tasks.filter((task) => this.children.has(this.processKey(batch.id, task.courseId))).length;
   }
 
+  getFetchableCourse(courseId) {
+    const course = this.archiveService.getCourseRecord(courseId);
+    if (course.archiveOnly === true || course.membershipPresent === false) {
+      throw httpError(409, "This course has no current Blackboard membership. Its local archive remains available; scan courses again before fetching it.");
+    }
+    return course;
+  }
+
   startTask(batch, task) {
-    const course = this.archiveService.getCourseRecord(task.courseId);
-    const outputPath = this.archiveService.coursePath(course);
     task.status = "running";
     task.startedAt ||= this.nowIso();
     task.runStartedAt = this.nowIso();
@@ -340,6 +350,9 @@ class JobManager extends EventEmitter {
     task.exitCode = null;
     task.failure = null;
     task.result = null;
+    // Each worker emits cumulative counters for its own attempt. A restarted
+    // worker must not show the previous attempt's totals before its first event.
+    task.transfer = { networkFiles: 0, networkBytes: 0, reusedFiles: 0, reusedBytes: 0, placeholderFiles: 0, unresolvedFiles: 0 };
     let exited = false;
     const onError = (error) => {
       task.failure = describeFetchFailure(`Unable to start fetch: ${error.message}`);
@@ -353,6 +366,10 @@ class JobManager extends EventEmitter {
       this.handleExit(batch, task, code, signal);
     };
     try {
+      // Recheck when the worker actually starts: queued and restored jobs may
+      // outlive the membership inventory used to create the batch.
+      const course = this.getFetchableCourse(task.courseId);
+      const outputPath = this.archiveService.coursePath(course);
       const child = this.processRunner.startFetch({
         attachmentConcurrency: batch.options.attachmentConcurrency,
         base: batch.runtime.base,
@@ -456,6 +473,9 @@ class JobManager extends EventEmitter {
       if (otherActive && otherActive.id !== batch.id) {
         throw httpError(409, "Another fetch batch is active");
       }
+      if (["paused", "interrupted", "failed", "incomplete", "cancelled"].includes(task.status)) {
+        this.getFetchableCourse(task.courseId);
+      }
     }
     if (action === "pause") {
       if (task.status === "queued") {
@@ -537,9 +557,13 @@ class JobManager extends EventEmitter {
       if (otherActive && otherActive.id !== batch.id) {
         throw httpError(409, "Another fetch batch is active");
       }
+      const resumableTasks = batch.tasks.filter((item) => ["paused", "interrupted"].includes(item.status));
+      // Validate the whole request before resuming any paused process or
+      // changing the batch, so one denied course cannot leave a partial resume.
+      for (const task of resumableTasks) this.getFetchableCourse(task.courseId);
       batch.status = "running";
       batch.finishedAt = null;
-      for (const task of batch.tasks.filter((item) => ["paused", "interrupted"].includes(item.status))) {
+      for (const task of resumableTasks) {
         this.controlTask(batchId, task.courseId, "resume");
       }
       this.scheduler.soon(() => this.pump(batch.id));

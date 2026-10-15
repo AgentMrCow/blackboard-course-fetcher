@@ -139,6 +139,42 @@ test("application manager starts a fetch through the runner port and records com
   assert.ok(repository.saves >= 3);
 });
 
+test("a membership change before launch fails the queued course and continues the batch", () => {
+  const service = archiveService();
+  const courses = [service.course, { ...service.course, id: "_2_1", code: "TEST2000" }];
+  service.getInventory = () => ({ courses });
+  service.getCourseRecord = (id) => courses.find((course) => course.id === id);
+  service.coursePath = (course) => {
+    assert.notEqual(course.archiveOnly, true, "rejected courses must not resolve output paths");
+    return `/archive/${course.id}`;
+  };
+  const runner = fakeProcessRunner();
+  const scheduler = controlledScheduler();
+  const repository = memoryRepository();
+  const manager = new JobManager({
+    archiveService: service, clock: () => NOW, idFactory: () => "fetch-membership",
+    jobRepository: repository, processRunner: runner, scheduler,
+  });
+  manager.createAndStart({ courseIds: courses.map((course) => course.id), courseConcurrency: 1 }, {
+    base: "https://blackboard.example.edu", stateFile: "/private/state.json",
+  });
+  courses[0].archiveOnly = true;
+  scheduler.flushSoon();
+
+  const batch = manager.batches[0];
+  assert.deepEqual(batch.tasks.map((task) => task.status), ["failed", "running"]);
+  assert.match(batch.tasks[0].failure.message, /no current Blackboard membership/);
+  assert.equal(batch.tasks[0].transfer.networkFiles, 0);
+  assert.equal(batch.tasks[0].result.status, "complete");
+  assert.deepEqual(runner.specifications.map((specification) => specification.courseId), ["_2_1"]);
+  assert.equal(manager.children.size, 1);
+  runner.exits[0].onExit(0, null);
+  scheduler.flushSoon();
+  assert.equal(manager.children.size, 0);
+  assert.equal(batch.status, "completed_with_issues");
+  assert.match(repository.batches[0].tasks[0].failure.message, /no current Blackboard membership/);
+});
+
 test("application manager delegates live pause and resume signals to the runner", () => {
   const runner = fakeProcessRunner();
   const scheduler = controlledScheduler();
@@ -217,6 +253,81 @@ function startTestFetch({ runner = fakeProcessRunner(), service = archiveService
   scheduler.flushSoon();
   return { manager, repository, runner, scheduler, task: manager.batches[0].tasks[0] };
 }
+
+test("phase and final snapshots account for fallback transfers after the last file event", () => {
+  const { task, runner, repository } = startTestFetch();
+  const emit = (event) => runner.exits[0].onStdout(`${PROGRESS_PREFIX}${JSON.stringify(event)}`);
+  emit({ type: "transfer", path: "lecture.pdf", transfer: { networkFiles: 1, networkBytes: 10 } });
+  emit({ type: "phase-end", phase: "additionalAreas", transfer: { networkFiles: 3, networkBytes: 30 } });
+  assert.equal(task.transfer.networkFiles, 3);
+  assert.equal(task.transfer.networkBytes, 30);
+  emit({ type: "done", summary: "Archive written", transfer: { networkFiles: 4, networkBytes: 40, reusedFiles: 2 } });
+  runner.exits[0].onExit(0, null);
+  assert.equal(repository.batches[0].tasks[0].transfer.networkFiles, 4);
+  assert.equal(repository.batches[0].tasks[0].transfer.networkBytes, 40);
+  assert.equal(repository.batches[0].tasks[0].transfer.reusedFiles, 2);
+});
+
+test("a retry starts with zero transfer counters and retains zero on an early access failure", () => {
+  const { manager, task, runner, scheduler } = startTestFetch();
+  runner.exits[0].onStdout(`${PROGRESS_PREFIX}${JSON.stringify({
+    type: "transfer", transfer: { networkFiles: 4, networkBytes: 40, reusedFiles: 3, reusedBytes: 30 },
+  })}`);
+  runner.exits[0].onExit(2, null);
+  manager.controlTask("fetch-failure", "_1_1", "resume");
+  scheduler.flushSoon();
+  assert.deepEqual(task.transfer, {
+    networkFiles: 0, networkBytes: 0, reusedFiles: 0, reusedBytes: 0, placeholderFiles: 0, unresolvedFiles: 0,
+  });
+  runner.exits[1].onStdout(`${PROGRESS_PREFIX}${JSON.stringify({ type: "fatal", message: "403 Forbidden" })}`);
+  runner.exits[1].onExit(1, null);
+  assert.equal(task.transfer.networkFiles, 0);
+  assert.equal(task.transfer.reusedFiles, 0);
+  assert.equal(runner.specifications[1].reuseValidatedCache, true);
+});
+
+test("retry rejects a course without current membership before changing its task", () => {
+  const service = archiveService();
+  const { manager, task, runner, scheduler } = startTestFetch({ service });
+  runner.exits[0].onExit(1, null);
+  service.course.membershipPresent = false;
+  const before = structuredClone(task);
+
+  assert.throws(() => manager.controlTask("fetch-failure", "_1_1", "resume"),
+    (error) => error.statusCode === 409 && /no current Blackboard membership/.test(error.message));
+  scheduler.flushSoon();
+  assert.deepEqual(task, before);
+  assert.equal(runner.specifications.length, 1);
+  assert.equal(manager.children.size, 0);
+});
+
+test("batch resume rejects changed memberships before signalling any paused worker", () => {
+  const service = archiveService();
+  const courses = [service.course, { ...service.course, id: "_2_1", code: "TEST2000" }];
+  service.getInventory = () => ({ courses });
+  service.getCourseRecord = (id) => courses.find((course) => course.id === id);
+  const runner = fakeProcessRunner();
+  const scheduler = controlledScheduler();
+  const manager = new JobManager({
+    archiveService: service, clock: () => NOW, idFactory: () => "fetch-paused-membership",
+    jobRepository: memoryRepository(), processRunner: runner, scheduler,
+  });
+  manager.createAndStart({ courseIds: courses.map((course) => course.id), courseConcurrency: 2 }, {
+    base: "https://blackboard.example.edu", stateFile: "/private/state.json",
+  });
+  scheduler.flushSoon();
+  manager.controlBatch("fetch-paused-membership", "pause");
+  courses[1].membershipPresent = false;
+
+  const denied = (error) => error.statusCode === 409 && /no current Blackboard membership/.test(error.message);
+  assert.throws(() => manager.controlBatch("fetch-paused-membership", "resume"), denied);
+  assert.throws(() => manager.controlTask("fetch-paused-membership", "_2_1", "resume"), denied);
+  scheduler.flushSoon();
+  assert.equal(manager.batches[0].status, "paused");
+  assert.deepEqual(manager.batches[0].tasks.map((task) => task.status), ["paused", "paused"]);
+  assert.deepEqual(runner.signals.map((entry) => entry.signal), ["SIGSTOP", "SIGSTOP"]);
+  assert.equal(manager.children.size, 2);
+});
 
 test("fatal progress retains a long cause through process exit and persistence alongside an older usable archive", () => {
   const service = archiveService();

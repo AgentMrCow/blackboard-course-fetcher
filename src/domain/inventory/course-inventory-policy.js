@@ -44,6 +44,8 @@ function normalizeMembership(membership) {
       },
       view: String(course.ultraStatus || "UNKNOWN").toUpperCase(),
       available: course.isAvailable !== false && membership.isAvailable !== false,
+      membershipPresent: true,
+      archiveOnly: false,
       hidden: membership.userHasHidden === true,
       lastAccessDate: membership.lastAccessDate || null,
     },
@@ -56,6 +58,34 @@ function initialFetchStatus(existingArchive) {
   return existingArchive.coverageComplete ? "existing complete" : "existing incomplete";
 }
 
+function reconcileArchivedCourses(liveCourses, archivedCourses) {
+  const archivesById = new Map(archivedCourses.map((course) => [course.id, course]));
+  const liveIds = new Set(liveCourses.map((course) => course.id));
+  return [
+    ...liveCourses.map((course) => {
+      const archived = archivesById.get(course.id);
+      if (!archived) return course;
+      // A renamed course or term must keep pointing at its existing local files.
+      return {
+        ...course,
+        outputDirectory: archived.outputDirectory,
+        outputPath: archived.outputPath,
+        existingArchive: archived.existingArchive,
+        fetchStatus: initialFetchStatus(archived.existingArchive),
+      };
+    }),
+    ...archivedCourses.filter((course) => !liveIds.has(course.id)).map((course) => ({
+      ...course,
+      available: false,
+      membershipPresent: false,
+      archiveOnly: true,
+      selected: false,
+      fetchStatus: "archive only: not in current memberships",
+      exitCode: null,
+    })),
+  ];
+}
+
 function applyCourseSelection(courses, options = {}) {
   const requestedIds = new Set(Array.isArray(options.courseIds) ? options.courseIds : []);
   const unknownIds = [...requestedIds].filter((id) => !courses.some((course) => course.id === id));
@@ -64,6 +94,7 @@ function applyCourseSelection(courses, options = {}) {
   const view = String(options.view || "ALL").toUpperCase();
   const term = options.term === undefined ? null : String(options.term).toLowerCase();
   let selected = courses.filter((course) => {
+    if (course.archiveOnly || course.membershipPresent === false) return false;
     if (!options.all && !requestedIds.has(course.id)) return false;
     if (!options.includeUnavailable && !course.available) return false;
     if (view !== "ALL" && course.view !== view) return false;
@@ -75,7 +106,9 @@ function applyCourseSelection(courses, options = {}) {
   const selectedIds = new Set(selected.map((course) => course.id));
   for (const course of courses) {
     course.selected = selectedIds.has(course.id);
-    if (requestedIds.has(course.id) && !course.available && !options.includeUnavailable) {
+    if (requestedIds.has(course.id) && (course.archiveOnly || course.membershipPresent === false)) {
+      course.fetchStatus = "skipped: not in current memberships";
+    } else if (requestedIds.has(course.id) && !course.available && !options.includeUnavailable) {
       course.fetchStatus = "skipped: unavailable";
     }
   }
@@ -88,6 +121,7 @@ module.exports = {
   courseFolder,
   initialFetchStatus,
   normalizeMembership,
+  reconcileArchivedCourses,
   sanitizeInventoryPart,
   termSegments,
 };

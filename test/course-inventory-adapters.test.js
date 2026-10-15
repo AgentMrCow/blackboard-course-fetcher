@@ -113,3 +113,46 @@ test("Playwright state repository reads storage state without exposing it elsewh
   assert.equal(repository.exists(file), true);
   assert.equal(repository.load(file).cookies[0].value, "private");
 });
+
+test("archived inventory rows require a matching local manifest and reject escaping metadata", (context) => {
+  const archiveRoot = temporaryDirectory(context);
+  const repository = new CourseInventoryRepository({ archiveRoot });
+  const rows = ["valid", "deleted", "empty", "wrong-id"].map((id) => ({ id, name: id, outputDirectory: id }));
+  fs.writeFileSync(path.join(archiveRoot, "courses.json"), JSON.stringify({ courses: rows }));
+  for (const id of ["valid", "empty", "wrong-id"]) fs.mkdirSync(path.join(archiveRoot, id));
+  fs.writeFileSync(path.join(archiveRoot, "valid", "manifest.json"), JSON.stringify({ courseId: "valid" }));
+  fs.writeFileSync(path.join(archiveRoot, "wrong-id", "manifest.json"), JSON.stringify({ courseId: "someone-else" }));
+  assert.deepEqual(repository.readArchivedCourses().map((item) => item.id), ["valid"]);
+
+  const outside = temporaryDirectory(context);
+  const outsideManifest = path.join(outside, "manifest.json");
+  fs.writeFileSync(outsideManifest, JSON.stringify({ courseId: "empty" }));
+  fs.symlinkSync(outsideManifest, path.join(archiveRoot, "empty", "manifest.json"));
+  assert.throws(() => repository.readArchivedCourses(), /outside the archive root/);
+  assert.throws(() => repository.readExistingArchive(path.join(archiveRoot, "empty")), /outside the archive root/);
+});
+
+test("unreadable archived manifests stop inventory replacement instead of silently dropping the course", (context) => {
+  const archiveRoot = temporaryDirectory(context);
+  const repository = new CourseInventoryRepository({ archiveRoot });
+  fs.mkdirSync(path.join(archiveRoot, "course"));
+  fs.writeFileSync(path.join(archiveRoot, "courses.json"), JSON.stringify({ courses: [{ id: "course", outputDirectory: "course" }] }));
+  fs.writeFileSync(path.join(archiveRoot, "course", "manifest.json"), "{");
+  assert.throws(() => repository.readArchivedCourses(), /Cannot inspect archived course course/);
+});
+
+test("archived inventory paths survive moving a Windows catalog to another platform", (context) => {
+  const archiveRoot = temporaryDirectory(context);
+  const repository = new CourseInventoryRepository({ archiveRoot });
+  const segments = ["2025-26", "1st Term", "Example Course"];
+  const courseDirectory = path.join(archiveRoot, ...segments);
+  fs.mkdirSync(courseDirectory, { recursive: true });
+  fs.writeFileSync(path.join(courseDirectory, "manifest.json"), JSON.stringify({ courseId: "course" }));
+  fs.writeFileSync(path.join(archiveRoot, "courses.json"), JSON.stringify({
+    courses: [{ id: "course", outputDirectory: segments.join("\\") }],
+  }));
+  const [course] = repository.readArchivedCourses();
+  assert.equal(course.id, "course");
+  assert.equal(course.outputPath, courseDirectory);
+  assert.equal(course.outputDirectory, path.join(...segments));
+});

@@ -52,7 +52,7 @@
     <div class="course-header-inner">
       <CourseAvatar {course} />
       <div class="course-heading"><h1>{course.name}</h1><div class="meta-line"><strong>{course.code}</strong><span>{course.termName}</span><span>{course.view}</span><StatusBadge status={course.archive.status} /></div></div>
-      <div class="page-actions"><button class="button secondary" onclick={() => openFetch([course.id])}><Icon name="refresh-cw" /><span>{course.archive.exists ? "Refresh archive" : "Fetch course"}</span></button>{#if externalUrl}<a class="button secondary" href={externalUrl} target="_blank" rel="noreferrer"><Icon name="external-link" /><span>Blackboard</span></a>{/if}</div>
+      <div class="page-actions"><button class="button secondary" disabled={course.archiveOnly || course.membershipPresent === false} title={course.archiveOnly || course.membershipPresent === false ? "No current Blackboard membership; local archive remains available" : undefined} onclick={() => openFetch([course.id])}><Icon name="refresh-cw" /><span>{course.archive.exists ? "Refresh archive" : "Fetch course"}</span></button>{#if externalUrl}<a class="button secondary" href={externalUrl} target="_blank" rel="noreferrer"><Icon name="external-link" /><span>Blackboard</span></a>{/if}</div>
     </div>
     <nav class="course-tabs" aria-label="Course sections">{#each tabs as [key, label]}<a href={`#/course/${encodeURIComponent(course.id)}/${key}`} class:active={tab === key}>{label}</a>{/each}</nav>
   </div>

@@ -115,16 +115,14 @@ const ATTACHMENT_CONCURRENCY = input.attachmentConcurrency;
 const COURSE_NAME_HINT = input.courseNameHint;
 const COURSE_TERM_HINT = input.courseTermHint;
 const MANIFEST_FILE = path.join(OUT_ROOT, "manifest.json");
+const FAILURE_MANIFEST_FILE = path.join(OUT_ROOT, "manifest.failed.json");
 
 const state = stateRepository.load(STATE_FILE);
 let previousManifest = null;
 try {
   previousManifest = JSON.parse(fs.readFileSync(MANIFEST_FILE, "utf8"));
 } catch {}
-const layoutMigration = migrateLegacyArchiveLayout(OUT_ROOT, previousManifest);
-if (layoutMigration.length) {
-  console.log(`migrated ${layoutMigration.length} archive directories to layout ${CURRENT_ARCHIVE_LAYOUT_VERSION}`);
-}
+const layoutMigration = [];
 
 const manifest = createCourseFetchManifest({
   archiveLayoutVersion: CURRENT_ARCHIVE_LAYOUT_VERSION,
@@ -157,7 +155,7 @@ const progressReporter = new CourseFetchProgressReporter({
 const emitProgress = progressReporter.emit.bind(progressReporter);
 const emitTransfer = progressReporter.transfer.bind(progressReporter);
 const runPhase = progressReporter.runPhase.bind(progressReporter);
-const courseFileStore = createCourseFileStore({ outputRoot: OUT_ROOT });
+const courseFileStore = createCourseFileStore({ outputRoot: OUT_ROOT, preserveHistory: true });
 const ensureDir = courseFileStore.ensureDirectory;
 const preferredPath = courseFileStore.preferredPath;
 const uniquePath = courseFileStore.uniquePath;
@@ -171,6 +169,20 @@ function archivePath(file) {
 function writeText(file, text, artifact = null) {
   writeStoredText(file, text);
   if (artifact) recordManifestArtifact(manifest, archivePath(file), artifact);
+}
+
+function prepareArchiveForRefresh() {
+  // Establish the baseline before any exports or legacy directory migration.
+  // Subsequent writes preserve each replaced file's original bytes once per run.
+  courseFileStore.preserveFile(MANIFEST_FILE);
+  courseFileStore.preserveFile(FAILURE_MANIFEST_FILE);
+  manifest.previousMetadataHistory = courseFileStore.historyPath();
+  layoutMigration.push(...migrateLegacyArchiveLayout(OUT_ROOT, previousManifest));
+  if (layoutMigration.length) {
+    console.log(`migrated ${layoutMigration.length} archive directories to layout ${CURRENT_ARCHIVE_LAYOUT_VERSION}`);
+  }
+  ensureDir(OUT_ROOT);
+  ensureDir(path.join(OUT_ROOT, ARCHIVE_DIRECTORIES.courseContents));
 }
 
 const CONTAINER_HANDLERS = new Set([
@@ -933,6 +945,8 @@ async function saveExternalLink(item, ancestors) {
     sha256: sha256File(shortcutPath),
     integrityVerified: true,
     linkOnly: true,
+    transferDisposition: "link-only",
+    networkBytes: 0,
   });
   pendingExternalLinks.push({
     contentId: item.id || null,
@@ -1562,6 +1576,7 @@ async function saveAssessment(item, ancestors, me, attachments = []) {
     assignedGroups: (detail?.assignedGroups || []).map((entry) => entry.groupTitle || entry.group?.title).filter(Boolean),
     directory: path.relative(OUT_ROOT, dir),
     grade: null,
+    gradeFeedback: null,
     attempts: [],
   };
   manifest.assessments.push(record);
@@ -1607,6 +1622,56 @@ async function saveAssessment(item, ancestors, me, attachments = []) {
   }
   record.grade = summarizeGrade(grade, column.possible);
   if (!grade?.id) return;
+
+  // An overridden grade can have released instructor feedback even when every
+  // attempt's feedbackToUser is empty. Keep it at grade scope, independently.
+  const gradeFeedback = grade.instructorFeedback;
+  const gradeFeedbackHtml = gradeFeedback?.displayText || gradeFeedback?.rawText || "";
+  const gradeFeedbackText = stripHtml(gradeFeedbackHtml);
+  const gradeFeedbackContext = assessmentUiContext(item, column.id);
+  const gradeFeedbackAttachments = mergeAttachments(
+    directSubmissionFiles(gradeFeedback, `${item.title} grade feedback`, gradeFeedbackContext),
+    extractAttachments(gradeFeedbackHtml, `${item.title} grade feedback`, gradeFeedbackContext)
+  );
+  if (gradeFeedbackText || gradeFeedbackAttachments.length) {
+    const feedbackDir = path.join(dir, "grade_feedback");
+    ensureDir(feedbackDir);
+    const htmlPath = path.join(feedbackDir, "feedback.html");
+    const textPath = path.join(feedbackDir, "feedback.txt");
+    const provenance = {
+      scope: "grade",
+      source: "Blackboard grade.instructorFeedback",
+      gradeId: grade.id,
+      columnId: column.id,
+    };
+    const artifact = {
+      primaryPath: archivePath(htmlPath),
+      groupKey: archivePath(htmlPath),
+      logicalItemType: "assessment-grade-feedback",
+      logicalItemId: grade.id,
+      logicalItemTitle: item.title,
+    };
+    writeText(htmlPath, htmlPage(`${item.title} - grade feedback`, gradeFeedbackHtml, provenance), {
+      ...artifact,
+      origin: "blackboard-content-export",
+      role: "feedback-rendered",
+      searchable: false,
+    });
+    writeText(textPath, gradeFeedbackText, {
+      ...artifact,
+      origin: "derived-search-text",
+      role: "feedback-search-text",
+    });
+    const before = manifest.downloads.length;
+    await downloadAttachments(gradeFeedbackAttachments, path.join(feedbackDir, "files"), `${item.title} grade feedback`);
+    record.gradeFeedback = {
+      ...provenance,
+      text: gradeFeedbackText,
+      htmlPath: archivePath(htmlPath),
+      textPath: archivePath(textPath),
+      files: manifest.downloads.slice(before).map((download) => download.path),
+    };
+  }
 
   let attempts = [];
   try {
@@ -1766,6 +1831,9 @@ async function saveAssessment(item, ancestors, me, attachments = []) {
       origin: "derived-search-text",
       role: "submission-search-text",
     });
+    // Receipt sizes include text submissions, not only uploaded files.
+    // Comments alone do not establish that a submission was archived.
+    attemptRecord.submissionTextArchived = Boolean(stripHtml(submissionHtml));
 
     for (const viewerFile of viewerSubmissionFiles(submissionDetail, attemptDetail, tool)) {
       pendingAnnotationChecks.push({
@@ -1957,6 +2025,7 @@ async function saveGradebook(me) {
       position: finiteNumber(column.position),
       directory: assessment?.directory || null,
       grade: summarizeGrade(rawGrade, column.possible),
+      gradeFeedback: assessment?.gradeFeedback || null,
       attempts: (assessment?.attempts || []).map((attempt) => ({
         id: attempt.id,
         groupAttemptId: attempt.groupAttemptId,
@@ -2173,6 +2242,8 @@ async function downloadPendingFeedbackWithUi() {
         sha256: hash,
         integrityVerified: true,
         downloadMethod: "Blackboard UI fallback",
+        transferDisposition: "downloaded",
+        networkBytes: size,
       });
       manifest.transfer.networkFiles += 1;
       manifest.transfer.networkBytes += size;
@@ -2433,6 +2504,17 @@ function saveCurrentStatus() {
 
   const feedbackLines = [];
   for (const assessment of manifest.assessments) {
+    if (assessment.gradeFeedback) {
+      const feedback = assessment.gradeFeedback;
+      const text = feedback.text.replace(/\s+/g, " ").trim();
+      const excerpt = text.length > 240 ? `${text.slice(0, 237)}...` : text;
+      const files = feedback.files.map((file) => localLink(path.basename(file), file));
+      feedbackLines.push(
+        `- ${assessment.title}, ${localLink("grade feedback", feedback.htmlPath)}: ${excerpt || "Feedback provided."}${
+          files.length ? ` Files: ${files.join(", ")}.` : ""
+        }`
+      );
+    }
     for (let index = 0; index < assessment.attempts.length; index += 1) {
       const attempt = assessment.attempts[index];
       if (!attempt.feedback) continue;
@@ -2579,7 +2661,7 @@ function auditCoverage() {
         submissionStatus: item.grade.submissionStatus,
       });
     }
-    if (item.grade?.hasAttemptOrGradeFeedback === true && !assessment.attempts.some((attempt) => attempt.feedback)) {
+    if (item.grade?.hasAttemptOrGradeFeedback === true && !assessment.gradeFeedback && !assessment.attempts.some((attempt) => attempt.feedback)) {
       advertisedFeedbackMissing.push({ title: item.title, columnId: item.columnId });
     }
     if (item.grade?.hasRubricAssociations === true) {
@@ -2588,7 +2670,11 @@ function auditCoverage() {
   }
   for (const assessment of manifest.assessments) {
     for (const attempt of assessment.attempts || []) {
-      if (finiteNumber(attempt.submissionTotalSize) > 0 && !(attempt.files || []).length) {
+      if (
+        finiteNumber(attempt.submissionTotalSize) > 0 &&
+        !(attempt.files || []).length &&
+        attempt.submissionTextArchived !== true
+      ) {
         submissionPayloadMissing.push({
           title: assessment.title,
           attemptId: attempt.id,
@@ -2873,9 +2959,8 @@ async function processItem(item, ancestors, me, parentId = null) {
 
 async function main() {
   emitProgress("start", { courseId: COURSE_ID, downloadMode: DOWNLOAD_MODE });
-  ensureDir(OUT_ROOT);
-  ensureDir(path.join(OUT_ROOT, ARCHIVE_DIRECTORIES.courseContents));
   let me = null;
+  let rootChildren = [];
   await runPhase("bootstrap", async () => {
     const course = await bbJson(`/learn/api/v1/courses/${COURSE_ID}`);
     manifest.course = {
@@ -2897,6 +2982,23 @@ async function main() {
           ? { id: null, name: COURSE_TERM_HINT, startDate: null, endDate: null }
           : null,
     };
+    rootChildren = await getAllPages(
+      `/learn/api/v1/courses/${COURSE_ID}/contents/ROOT/children?@view=Summary&expand=assignedGroups,selfEnrollmentGroups.group,gradebookCategory&includeInActivityTracking=true`
+    );
+    const firstContent = rootChildren.find((item) => item?.id);
+    if (firstContent) {
+      try {
+        await bbJson(`/learn/api/v1/courses/${COURSE_ID}/contents/${firstContent.id}`);
+      } catch (error) {
+        // Blackboard can expose ROOT after enrollment expires. Stop before
+        // exporting anything so the fatal handler retains the prior archive.
+        if (
+          /failed: 403\b/.test(error.message) &&
+          /"message"\s*:\s*"User is not enrolled or membership is unavailable"/.test(error.message)
+        ) throw error;
+        // Other item-level failures remain part of the normal content audit.
+      }
+    }
     me = await bbJson("/learn/api/v1/users/me");
     try {
       gradebookOverviewCount = await primeGradeCache(me.id);
@@ -2909,11 +3011,9 @@ async function main() {
     }
   });
 
+  prepareArchiveForRefresh();
   await runPhase("announcements", () => saveAnnouncements());
   await runPhase("content", async () => {
-    const rootChildren = await getAllPages(
-      `/learn/api/v1/courses/${COURSE_ID}/contents/ROOT/children?@view=Summary&expand=assignedGroups,selfEnrollmentGroups.group,gradebookCategory&includeInActivityTracking=true`
-    );
     for (const item of rootChildren) await processItem(item, [], me);
   });
   await runPhase("quizReviewFallbacks", async () => {
@@ -2935,6 +3035,8 @@ async function main() {
       annotationChecks: pendingAnnotationChecks,
       downloadMode: DOWNLOAD_MODE,
       uiDataGateway: blackboardExtrasBrowserGateway,
+      writeText: writeStoredText,
+      writeBuffer: courseFileStore.writeBuffer,
     })
   );
   await runPhase("coverageAudit", async () => auditCoverage());
@@ -2951,8 +3053,9 @@ async function main() {
     role: "archive-summary",
     searchable: false,
   });
+  manifest.previousMetadataHistory = courseFileStore.historyPath();
   writeText(MANIFEST_FILE, JSON.stringify(manifest, null, 2));
-  fs.rmSync(path.join(OUT_ROOT, "manifest.failed.json"), { force: true });
+  courseFileStore.removeFile(FAILURE_MANIFEST_FILE);
   const managedFileCount = new Set(manifest.downloads.map((download) => download.path).filter(Boolean)).size;
   const summary = [
     `# Blackboard Fetch: ${currentCourseName()}`,
@@ -2987,6 +3090,9 @@ async function main() {
     `Coverage audit: ${manifest.coverage?.complete ? "complete within the defined archive scope" : "incomplete"}`,
     `Warnings: ${manifest.warnings.length}`,
     `Errors: ${manifest.errors.length}`,
+    ...(manifest.previousMetadataHistory
+      ? [`Previous metadata backups: [${manifest.previousMetadataHistory}/index.json](${manifest.previousMetadataHistory}/index.json)`]
+      : []),
     "",
     "Current grade and deadline snapshot: [CURRENT_STATUS.md](CURRENT_STATUS.md)",
     "Structured gradebook data: [gradebook.json](gradebook.json)",
@@ -3066,8 +3172,10 @@ main().catch((error) => {
   try {
     ensureDir(OUT_ROOT);
     const failureManifestFile = fs.existsSync(MANIFEST_FILE)
-      ? path.join(OUT_ROOT, "manifest.failed.json")
+      ? FAILURE_MANIFEST_FILE
       : MANIFEST_FILE;
+    courseFileStore.preserveFile(failureManifestFile);
+    manifest.previousMetadataHistory = courseFileStore.historyPath();
     recordManifestArtifact(manifest, archivePath(failureManifestFile), {
       origin: "fetcher-record",
       role: "manifest",
@@ -3077,6 +3185,8 @@ main().catch((error) => {
     if (failureManifestFile !== MANIFEST_FILE) {
       console.error(`Previous manifest retained; failed attempt written to ${failureManifestFile}`);
     }
-  } catch {}
+  } catch (writeError) {
+    console.error(`Unable to save failure diagnostics: ${writeError.message}`);
+  }
   process.exit(1);
 });

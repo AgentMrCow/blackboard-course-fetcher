@@ -89,6 +89,19 @@ function textResponse(text) {
 
 const settleMicrotasks = () => new Promise((resolve) => setImmediate(resolve));
 
+test("inventory refresh removes stale fetch selections while retaining current memberships", async () => {
+  const { controller, state, requests } = harness();
+  state.selectedCourses = new Set(["active", "archived", "expired", "removed"]);
+  const loading = controller.refreshBootstrap();
+  requests[0].resolve({ inventory: { courses: [
+    { id: "active", membershipPresent: true },
+    { id: "archived", archiveOnly: true },
+    { id: "expired", membershipPresent: false },
+  ] } });
+  await loading;
+  assert.deepEqual([...state.selectedCourses], ["active"]);
+});
+
 for (const scenario of [
   { name: "query", change: (controller) => controller.setFileFilters({ query: "second" }), parameter: "q", expected: "second" },
   { name: "course", change: (controller) => controller.setFileFilters({ courseId: "other-course" }), parameter: "courseId", expected: "other-course" },

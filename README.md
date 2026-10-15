@@ -322,6 +322,16 @@ run instead of rereading every managed file. Each course `manifest.json` and
 `README.md` records phase timings, transferred bytes, validated cache reuse, and
 the number of files reread by the final audit.
 
+Fetch activity labels transfer counters **This attempt** and resets them when a
+new worker starts, including retries. These counters are separate from the total
+files already in the archive. Each new download record includes
+`transferDisposition`: `downloaded`, `downloaded-identical`, `reused-local`,
+`reused-http304`, `placeholder`, `unresolved`, or `link-only`. A
+`downloaded-identical` file still consumed network bandwidth; only its duplicate
+disk write was skipped. `networkBytes` counts successful file response bodies,
+including external snapshots and browser downloads, not HTTP overhead, metadata
+API traffic, or incomplete failed transfers. Older job history is not recounted.
+
 ### Fetch failures and repair
 
 Exit code 1 means the course worker stopped on a fatal error; it is not the
@@ -333,8 +343,32 @@ session alone cannot restore course permissions. Authentication redirects or
 expired-session errors instead require a fresh saved sign-in session. Exit code
 2 means the worker finished but its archive has errors or incomplete coverage.
 
-A failed retry retains the previous usable `manifest.json`; partial diagnostics
-are stored separately in `manifest.failed.json`. Existing Full-mode archives
+A fatal retry retains an existing `manifest.json`; partial diagnostics are stored
+separately in `manifest.failed.json`. An incomplete run (exit code 2) publishes
+its new manifest with coverage errors. Before exports begin, the worker checks
+content access: an explicit expired-membership denial stops the refresh before
+metadata writes or legacy layout migration.
+
+Every refresh preserves the previous manifest and saves original bytes before
+replacing generated files, including grades, announcements, additional-area
+exports, and external snapshots. Backups live under
+`<course>/.fetch-history/<run-id>/files/`; `index.json` records original paths,
+sizes, and SHA-256 hashes. Writes use temporary files and atomic replacement. A
+backup failure prevents that file's replacement. The manifest and summary link
+to the run's history when one exists. Backups are excluded from browsing/search
+and are never automatically pruned, so they use additional disk space.
+
+This is a file replacement history, not a whole-course transaction: a failed run
+can leave a mixture of old and new exports. To recover, stop fetching that course,
+copy it to a safe location, then use the chosen history's `index.json` to copy
+files from `backupPath` back to `path`, relative to the history and course roots
+respectively. Newly created files are not removed by this process. For a legacy
+layout migration, also inspect the run's `layoutMigration` mappings before
+restoring the old manifest, whose paths may refer to the earlier layout. Backups
+only protect writes made by versions with this feature; they cannot recreate
+previously lost data.
+
+Existing Full-mode archives
 containing metadata markers instead of real attachments, or colliding content
 paths, are shown as incomplete with a repair explanation. Run a Full fetch with
 validated cache reuse to repair accessible files. Healthy binaries can be reused,
@@ -357,6 +391,12 @@ Blackboard_Archive/
 ```
 
 Incremental runs retain the status of existing course archives in the root index.
+An inventory refresh also retains previously indexed courses whose matching
+local manifest exists even if Blackboard no longer returns their membership.
+These entries are marked `archiveOnly` and remain browsable, but cannot be
+selected for a fetch, including with `--include-unavailable`. Scan courses again
+after membership is restored. This reconciliation does not discover directories
+that were never listed in `courses.json`.
 
 Inside each course, the fetcher uses stable archive categories instead of assuming
 that every instructor chose the same Blackboard menu names:
@@ -385,7 +425,8 @@ their parent's allocated folder, and a later refetch preserves those paths even
 if Blackboard returns the items in a different order.
 
 When an older archive is refreshed, the fetcher migrates the previous numbered
-directories before fetching so incremental runs do not leave duplicate layouts.
+directories after checking access and before exporting so incremental runs do not
+leave duplicate layouts.
 
 ## Artifact Provenance
 
@@ -475,6 +516,11 @@ when either the review page or the Learn API question payload was archived.
 - Ultra discussion forums include recursively archived messages and replies; a discovered but unarchived discussion attachment marks that area incomplete.
 - Classic discussion-board IDs and unread counts are archived; Blackboard may restrict board details.
 - Classic submission filenames are collected from the legacy submission-history page.
+- Text-only submissions count as archived payloads; comments alone do not.
+- Released grade-level instructor feedback is archived and displayed separately
+  from per-attempt feedback, including when a grade was overridden.
+- Recovery-marked missing dates, grades, and attempt history display as unknown
+  or not recovered instead of implying no deadline, no grade, or no submission.
 - Attachment UI recovery requires an exact Blackboard resource-ID match and only trusts same-origin WebDAV URLs; unsupported forms are reported as unresolved and make coverage incomplete.
 - Instructor-only data, SCORM runtime state, inaccessible third-party LTI data, and other groups' restricted rosters cannot be fetched.
 - Legacy quiz payload errors from the Learn API are recovered through the authenticated Classic review page when that page is student-visible.

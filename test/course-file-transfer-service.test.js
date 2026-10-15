@@ -144,6 +144,8 @@ test("network transfer streams content and replaces an opaque Blackboard filenam
   assert.equal(requests[0].label, "file xid-123_1");
   assert.equal(state.transfer.networkFiles, 1);
   assert.equal(state.transfer.networkBytes, 11);
+  assert.equal(state.downloads[0].transferDisposition, "downloaded");
+  assert.equal(state.downloads[0].networkBytes, 11);
   assert.equal(state.downloads[0].etag, '"etag-one"');
   assert.equal(
     state.downloads[0].finalUrl,
@@ -197,6 +199,9 @@ test("validated local cache reuse avoids a network request", async (context) => 
   assert.equal(state.transfer.reusedFiles, 1);
   assert.equal(state.transfer.reusedBytes, 11);
   assert.equal(state.downloads[0].cacheValidation, "local SHA-256");
+  assert.equal(state.downloads[0].transferDisposition, "reused-local");
+  assert.equal(state.downloads[0].networkBytes, 0);
+  assert.equal(state.transfer.networkFiles, 0);
   assert.deepEqual(runtime.events[0].slice(0, 2), ["reused", existing]);
 });
 
@@ -394,7 +399,10 @@ test("conditional request reuses an integrity-checked 304 response", async (cont
   assert.equal(headers["If-None-Match"], '"old-etag"');
   assert.equal(headers["If-Modified-Since"], previous.lastModified);
   assert.equal(state.downloads[0].cacheValidated, true);
+  assert.equal(state.downloads[0].transferDisposition, "reused-http304");
+  assert.equal(state.downloads[0].networkBytes, 0);
   assert.equal(state.transfer.reusedFiles, 1);
+  assert.equal(state.transfer.networkFiles, 0);
   assert.deepEqual(runtime.events[0].slice(0, 2), ["cached", existing]);
 });
 
@@ -423,7 +431,13 @@ test("identical network content reuses the existing version", async (context) =>
   assert.equal(result, existing);
   assert.deepEqual(fs.readdirSync(directory), ["report.txt"]);
   assert.equal(state.transfer.networkFiles, 1);
+  assert.equal(state.transfer.networkBytes, 12);
+  assert.equal(state.transfer.reusedFiles, 0);
   assert.equal(state.downloads[0].contentValidated, true);
+  assert.equal(state.downloads[0].skipped, true);
+  assert.equal(state.downloads[0].transferDisposition, "downloaded-identical");
+  assert.equal(state.downloads[0].networkBytes, 12);
+  assert.equal(state.downloads[0].cacheValidated, undefined);
   assert.deepEqual(runtime.events[0].slice(0, 2), ["identical", existing]);
 });
 

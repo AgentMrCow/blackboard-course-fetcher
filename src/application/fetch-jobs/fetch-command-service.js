@@ -17,6 +17,12 @@ class FetchCommandService {
   }
 
   start(input = {}) {
+    const requested = new Set(Array.isArray(input.courseIds) ? input.courseIds : []);
+    const inventory = this.jobs.archiveService.getInventory();
+    if (inventory.courses.some((course) => requested.has(course.id)
+      && (course.archiveOnly === true || course.membershipPresent === false))) {
+      throw httpError(409, "A selected course has no current Blackboard membership. Its local archive remains available; scan courses again before fetching it.");
+    }
     const mode = input.mode ?? this.settings.downloadMode;
     const freeBytes = this.systemStatus(this.settings).disk?.freeBytes;
     if (

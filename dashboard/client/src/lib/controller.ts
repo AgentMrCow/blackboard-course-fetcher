@@ -1,7 +1,7 @@
 import { api } from "./api";
 import { fileEndpoint } from "./format";
 import { appState, changeState, navigate, readState, routeFromHash, showToast } from "./state";
-import type { ArchiveFile, Bootstrap, CourseDetail, FetchBatch, FileDialogState, FilePage, FileScope, JsonRecord, SearchResult } from "./types";
+import type { AppState, ArchiveFile, Bootstrap, CourseDetail, FetchBatch, FileDialogState, FilePage, FileScope, JsonRecord, SearchResult } from "./types";
 
 let events: EventSource | null = null;
 let fileLoadSequence = 0;
@@ -30,10 +30,20 @@ export async function ensureCourse(courseId: string, force = false): Promise<Cou
   return detail;
 }
 
+function pruneCourseSelection(state: AppState): void {
+  const eligible = new Set((state.bootstrap?.inventory.courses || [])
+    .filter((course) => !course.archiveOnly && course.membershipPresent !== false)
+    .map((course) => course.id));
+  for (const id of state.selectedCourses) {
+    if (!eligible.has(id)) state.selectedCourses.delete(id);
+  }
+}
+
 export async function refreshBootstrap(showSuccess = false): Promise<void> {
   const bootstrap = await api<Bootstrap>(`/api/bootstrap${showSuccess ? "?refresh=1" : ""}`);
   changeState((state) => {
     state.bootstrap = bootstrap;
+    pruneCourseSelection(state);
     state.courseCache.clear();
     state.allFiles = null;
     state.loading = false;
@@ -116,6 +126,11 @@ export function openFetch(courseIds: string[]): void {
   if (!unique.length) {
     navigate("courses");
     showToast("Select one or more courses before starting a fetch.");
+    return;
+  }
+  if (state.bootstrap?.inventory.courses.some((course) => unique.includes(course.id)
+    && (course.archiveOnly || course.membershipPresent === false))) {
+    showToast("A selected course has no current Blackboard membership. Its local archive is still available. Refresh inventory after membership is restored.", "error");
     return;
   }
   if (!(state.bootstrap?.auth?.validation?.valid || state.bootstrap?.auth?.status === "connected")) {
@@ -414,6 +429,7 @@ function connectEvents(): void {
     changeState((state) => {
       if (!state.bootstrap) return;
       state.bootstrap.inventory = inventory;
+      pruneCourseSelection(state);
       if (summary) state.bootstrap.summary = summary;
       state.courseCache.clear();
       state.allFiles = null;

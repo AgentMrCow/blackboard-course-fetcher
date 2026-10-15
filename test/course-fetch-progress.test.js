@@ -44,6 +44,7 @@ test("single-course progress reporter preserves phase and transfer frames", asyn
       at: "2026-07-23T10:00:00.025Z",
       phase: "bootstrap",
       durationMs: 25,
+      transfer: { networkFiles: 1, networkBytes: 42 },
     },
     {
       type: "transfer",
@@ -56,6 +57,33 @@ test("single-course progress reporter preserves phase and transfer frames", asyn
     },
   ]);
   assert.ok(frames.every((line) => line.endsWith("\n")));
+});
+
+test("phase and final progress include fallback transfers without individual file events", async () => {
+  const frames = [];
+  const manifest = {
+    timings: { phases: {} },
+    transfer: { networkFiles: 0, networkBytes: 0, reusedFiles: 0 },
+  };
+  const reporter = new CourseFetchProgressReporter({
+    enabled: true,
+    manifest,
+    output: (line) => frames.push(JSON.parse(line.slice(PROGRESS_PREFIX.length))),
+  });
+  await reporter.runPhase("additionalAreas", async () => {
+    manifest.transfer.networkFiles += 2;
+    manifest.transfer.networkBytes += 84;
+  });
+  reporter.emit("done", { summary: "Archive written" });
+  assert.equal(frames[0].transfer, undefined);
+  assert.deepEqual(frames[1].transfer, { networkFiles: 2, networkBytes: 84, reusedFiles: 0 });
+  assert.deepEqual(frames[2].transfer, frames[1].transfer);
+
+  manifest.transfer.networkFiles += 1;
+  manifest.transfer.networkBytes += 21;
+  reporter.emit("fatal", { message: "A later operation failed" });
+  assert.deepEqual(frames[3].transfer, { networkFiles: 3, networkBytes: 105, reusedFiles: 0 });
+  assert.equal(frames[2].transfer.networkFiles, 2);
 });
 
 test("phase timing is recorded when an operation fails and events are disabled", async () => {

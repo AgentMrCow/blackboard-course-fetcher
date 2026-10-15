@@ -4,7 +4,8 @@ const os = require("os");
 const path = require("path");
 const test = require("node:test");
 
-const { archiveUiData } = require("../src/composition/blackboard-extra-archive");
+const { archiveBlackboardExtras, archiveUiData } = require("../src/composition/blackboard-extra-archive");
+const { createCourseFileStore } = require("../src/adapters/filesystem/course-file-store");
 
 function temporaryDirectory(context) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "blackboard-extra-archive-"));
@@ -19,6 +20,50 @@ function manifest() {
     warnings: [],
   };
 }
+
+test("additional archives preserve replaced exports and snapshots through the course store", async (testContext) => {
+  const outputRoot = temporaryDirectory(testContext);
+  const linkDirectory = path.join(outputRoot, "01_Course_Contents", "Example link");
+  const originals = new Map([
+    ["03_Calendar/calendar.json", '{"items":[{"title":"Prior event"}]}\n'],
+    ["01_Course_Contents/Example link/external_snapshot.html", "<p>Previous snapshot</p>"],
+  ]);
+  for (const [relative, body] of originals) {
+    const file = path.join(outputRoot, relative);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, body);
+  }
+  const store = createCourseFileStore({ outputRoot, preserveHistory: true });
+  const body = "<p>Current snapshot</p>";
+  testContext.mock.method(globalThis, "fetch", async () => new Response(body, {
+    headers: { "content-type": "text/html" },
+  }));
+  const currentManifest = {
+    ...manifest(), downloads: [],
+    transfer: { networkFiles: 0, networkBytes: 0, placeholderFiles: 0 },
+  };
+  await archiveBlackboardExtras({
+    BASE: "https://blackboard.example.edu", COURSE_ID: "_course_1", OUT_ROOT: outputRoot,
+    manifest: currentManifest, downloadMode: "full", annotationChecks: [],
+    externalLinks: [{ title: "Example link", url: "https://example.org/resource", directory: linkDirectory }],
+    bbJson: async () => ({ id: "_course_1", name: "Example course", ultraStatus: "CLASSIC" }),
+    getAllPages: async () => [],
+    writeText: store.writeText, writeBuffer: store.writeBuffer,
+  });
+  const history = path.join(outputRoot, store.historyPath());
+  const index = JSON.parse(fs.readFileSync(path.join(history, "index.json"), "utf8"));
+  for (const [relative, original] of originals) {
+    const saved = index.files.find((entry) => entry.path === relative);
+    assert.ok(saved, `backup entry for ${relative}`);
+    assert.equal(fs.readFileSync(path.join(history, saved.backupPath), "utf8"), original);
+    assert.notEqual(fs.readFileSync(path.join(outputRoot, relative), "utf8"), original);
+  }
+  assert.equal(currentManifest.downloads.length, 1);
+  assert.equal(currentManifest.downloads[0].transferDisposition, "downloaded");
+  assert.equal(currentManifest.downloads[0].networkBytes, Buffer.byteLength(body));
+  assert.equal(currentManifest.transfer.networkFiles, 1);
+  assert.equal(currentManifest.transfer.networkBytes, Buffer.byteLength(body));
+});
 
 test("UI archive preserves complete gateway payloads and achievement and annotation records", async (testContext) => {
   const outputRoot = temporaryDirectory(testContext);

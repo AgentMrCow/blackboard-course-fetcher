@@ -99,6 +99,7 @@ test("settings command rejects changes while a managed background task is active
 test("fetch command applies current settings to a new batch", () => {
   const calls = [];
   const jobs = {
+    archiveService: { getInventory: () => ({ courses: [{ id: "_1_1" }] }) },
     createAndStart(options, runtime) {
       calls.push({ options, runtime });
       return { id: "fetch-1" };
@@ -130,7 +131,10 @@ test("fetch command applies current settings to a new batch", () => {
 test("fetch command rejects a full fetch when archive storage is low", () => {
   let starts = 0;
   const service = new FetchCommandService({
-    jobs: { createAndStart: () => { starts += 1; } },
+    jobs: {
+      archiveService: { getInventory: () => ({ courses: [{ id: "_1_1" }] }) },
+      createAndStart: () => { starts += 1; },
+    },
     settings: SETTINGS,
     systemStatus: () => ({ disk: { freeBytes: MINIMUM_FULL_FETCH_FREE_BYTES - 1 } }),
   });
@@ -140,4 +144,48 @@ test("fetch command rejects a full fetch when archive storage is low", () => {
     (error) => error.statusCode === 507
   );
   assert.equal(starts, 0);
+});
+
+test("fetch command rejects mixed batches containing archive-only courses before launching work", () => {
+  for (const archivedState of [{ archiveOnly: true }, { membershipPresent: false }]) {
+    let starts = 0;
+    const service = new FetchCommandService({
+      jobs: {
+        archiveService: {
+          getInventory: () => ({ courses: [
+            { id: "active", membershipPresent: true, archiveOnly: false },
+            { id: "historical", available: true, ...archivedState },
+          ] }),
+        },
+        createAndStart: () => { starts += 1; },
+      },
+      settings: SETTINGS,
+      systemStatus: () => ({ disk: { freeBytes: 2 * 1024 ** 3 } }),
+    });
+    assert.throws(
+      () => service.start({ courseIds: ["active", "historical"], mode: "full", confirmFull: true }),
+      (error) => error.statusCode === 409 && /no current Blackboard membership/.test(error.message)
+    );
+    assert.equal(starts, 0);
+    service.start({ courseIds: ["active"] });
+    assert.equal(starts, 1);
+  }
+});
+
+test("fetch command reads the rebound archive inventory when settings change", () => {
+  let starts = 0;
+  const jobs = {
+    archiveService: { getInventory: () => ({ courses: [{ id: "course", archiveOnly: true }] }) },
+    createAndStart: () => { starts += 1; },
+  };
+  const service = new FetchCommandService({
+    jobs,
+    settings: SETTINGS,
+    systemStatus: () => ({ disk: {} }),
+  });
+  assert.throws(() => service.start({ courseIds: ["course"] }), (error) => error.statusCode === 409);
+  jobs.archiveService = { getInventory: () => ({ courses: [{ id: "course", membershipPresent: true, archiveOnly: false }] }) };
+  service.setSettings({ ...SETTINGS, archiveRoot: "/workspace/other-archive" });
+  service.start({ courseIds: ["course"] });
+  assert.equal(starts, 1);
 });

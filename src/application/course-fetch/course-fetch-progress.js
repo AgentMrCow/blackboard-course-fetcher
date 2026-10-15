@@ -25,6 +25,9 @@ class CourseFetchProgressReporter {
       `${PROGRESS_PREFIX}${JSON.stringify({
         type,
         at: this.clock().toISOString(),
+        ...(["phase-end", "done", "fatal"].includes(type) && this.manifest.transfer
+          ? { transfer: { ...this.manifest.transfer } }
+          : {}),
         ...details,
       })}\n`
     );

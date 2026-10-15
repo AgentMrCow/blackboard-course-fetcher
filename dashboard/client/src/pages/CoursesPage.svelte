@@ -28,14 +28,15 @@
   }
 
   function selectVisible() {
-    const allSelected = courses.every((course) => $appState.selectedCourses.has(course.id));
-    changeState((state) => courses.forEach((course) => allSelected ? state.selectedCourses.delete(course.id) : state.selectedCourses.add(course.id)));
+    const eligible = courses.filter((course) => !course.archiveOnly && course.membershipPresent !== false);
+    const allSelected = eligible.every((course) => $appState.selectedCourses.has(course.id));
+    changeState((state) => eligible.forEach((course) => allSelected ? state.selectedCourses.delete(course.id) : state.selectedCourses.add(course.id)));
   }
 </script>
 
 <div class="page">
   <header class="page-header">
-    <div><span class="eyebrow">{inventory.courses.length} memberships</span><h1>Courses</h1><p>Review the catalog first, then fetch only the courses and file bodies you need.</p></div>
+    <div><span class="eyebrow">{inventory.courses.length} courses</span><h1>Courses</h1><p>Review the catalog first, then fetch only the courses and file bodies you need.</p></div>
     <div class="page-actions">
       <button class="button secondary" onclick={() => runInventory().catch(reportError)}><Icon name="scan-search" /><span>Refresh inventory</span></button>
       <button class="button primary" disabled={!$appState.selectedCourses.size} onclick={() => openFetch([...$appState.selectedCourses])}><Icon name="download" /><span>Fetch selected</span></button>
@@ -56,10 +57,10 @@
         <div class="data-surface">
           {#each items as course}
             <div class="course-row">
-              <input type="checkbox" checked={$appState.selectedCourses.has(course.id)} onchange={(event) => toggle(course.id, event.currentTarget.checked)} aria-label={`Select ${course.name}`} />
+              <input type="checkbox" disabled={course.archiveOnly || course.membershipPresent === false} checked={$appState.selectedCourses.has(course.id)} onchange={(event) => toggle(course.id, event.currentTarget.checked)} aria-label={`Select ${course.name}`} />
               <CourseAvatar {course} />
               <button class="course-name-button" onclick={() => navigate(`course/${encodeURIComponent(course.id)}/overview`)}><strong>{course.name}</strong><small>{course.code} · {course.id}</small></button>
-              <div class="course-meta-cell"><strong>{course.view}</strong><span>{course.available ? "Available" : "Unavailable"}</span></div>
+              <div class="course-meta-cell"><strong>{course.view}</strong><span>{course.archiveOnly || course.membershipPresent === false ? "Local archive only" : course.available ? "Available" : "Unavailable"}</span></div>
               <div class="course-meta-cell"><StatusBadge status={course.archive.status} /><span>{course.archive.exists ? `${course.archive.fileCount} tracked files · ${relativeTime(course.archive.generatedAt)}` : course.available ? "Not fetched" : "Unavailable in Blackboard"}</span></div>
               <button class="icon-button" onclick={() => openCourseDetails(course.id)} title="Course actions" aria-label="Course actions"><Icon name="ellipsis" /></button>
             </div>

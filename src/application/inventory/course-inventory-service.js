@@ -2,6 +2,7 @@ const {
   applyCourseSelection,
   initialFetchStatus,
   normalizeMembership,
+  reconcileArchivedCourses,
 } = require("../../domain/inventory/course-inventory-policy");
 
 class CourseInventoryService {
@@ -24,7 +25,8 @@ class CourseInventoryService {
     const memberships = await this.membershipGateway.listMemberships({ base, stateFile });
     if (!Array.isArray(memberships)) throw new Error("Blackboard memberships response must be an array");
 
-    const courses = memberships
+    const archivedCourses = this.repository.readArchivedCourses();
+    const liveCourses = memberships
       .map((membership) => normalizeMembership(membership))
       .filter(Boolean)
       .map(({ course, pathSegments }) => {
@@ -38,7 +40,8 @@ class CourseInventoryService {
           fetchStatus: initialFetchStatus(existingArchive),
           exitCode: null,
         };
-      })
+      });
+    const courses = reconcileArchivedCourses(liveCourses, archivedCourses)
       .sort((left, right) => right.term.name.localeCompare(left.term.name) || left.name.localeCompare(right.name));
 
     const index = {
@@ -48,6 +51,8 @@ class CourseInventoryService {
       downloadMode,
       settings: { courseConcurrency, attachmentConcurrency },
       inventoryCount: courses.length,
+      membershipCount: liveCourses.length,
+      archiveOnlyCount: courses.length - liveCourses.length,
       courses,
     };
     const selected = applyCourseSelection(courses, selection);

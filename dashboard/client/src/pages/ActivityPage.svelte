@@ -4,7 +4,7 @@
   import Icon from "../components/Icon.svelte";
   import StatusBadge from "../components/StatusBadge.svelte";
   import { appState, cancelInventory, changeState, controlBatch, controlTask, navigate, openFetch, reportError } from "../lib/controller";
-  import { formatDuration, formatDate, relativeTime, titleCase } from "../lib/format";
+  import { formatBytes, formatDuration, formatDate, relativeTime, titleCase } from "../lib/format";
   import type { FetchBatch, FetchTask } from "../lib/types";
 
   $: jobs = $appState.bootstrap!.jobs || [];
@@ -43,8 +43,8 @@
             {#each current.tasks as task}
               <div class="task-row" class:active={$appState.logTaskId === task.id} role="button" tabindex="0" onclick={() => changeState((state) => state.logTaskId = task.id)} onkeydown={(event) => { if (event.key === "Enter") changeState((state) => state.logTaskId = task.id); }}>
                 <CourseAvatar course={{ id: task.courseId, code: task.courseCode, name: task.courseName } as any} />
-                <div class="task-title"><strong>{task.courseName}</strong><small class:task-failure={task.status === "failed"}>{#if task.status === "failed"}{task.failure?.message || task.currentItem || "Fetch failed. Select this course to inspect its output."}{:else}{task.currentPhase} · {task.currentItem}{/if}</small></div>
-                <div class="task-progress"><div class="progress-track"><span class="progress-bar" style={`width:${task.progress}%`}></span></div><div class="progress-meta"><span>{task.progress}% · {titleCase(task.status)}</span><span>{task.status === "failed" ? task.result ? `${task.result.fileCount || 0} archived files · fetch failed` : "Fetch failed" : task.remainingMs && !["completed", "incomplete", "cancelled"].includes(task.status) ? `${formatDuration(task.remainingMs)} remaining` : task.result ? `${task.result.fileCount || 0} files · ${task.result.errors || 0} errors` : ""}</span></div></div>
+                <div class="task-title"><strong>{task.courseName}</strong><small class:task-failure={task.status === "failed"}>{#if task.status === "failed"}{task.failure?.message || task.currentItem || "Fetch failed. Select this course to inspect its output."}{:else}{task.currentPhase} · {task.currentItem}{/if}</small>{#if task.runStartedAt && task.transfer}<small title="Counters for the latest worker attempt. Network transfers include identical file bodies received again; cache reuse avoids downloading the body.">This attempt: {task.transfer.networkFiles ?? 0} network transfers ({formatBytes(task.transfer.networkBytes)}) · {task.transfer.reusedFiles ?? 0} files reused</small>{/if}</div>
+                <div class="task-progress"><div class="progress-track"><span class="progress-bar" style={`width:${task.progress}%`}></span></div><div class="progress-meta"><span>{task.progress}% · {titleCase(task.status)}</span><span>{task.status === "failed" ? task.result ? `${task.result.fileCount || 0} archived files · fetch failed` : "Fetch failed" : task.remainingMs && !["completed", "incomplete", "cancelled"].includes(task.status) ? `${formatDuration(task.remainingMs)} remaining` : task.result ? `${task.result.fileCount || 0} archived files · ${task.result.errors || 0} errors` : ""}</span></div></div>
                 <div class="task-actions">
                   {#if ["running", "queued"].includes(task.status)}
                     <button class="icon-button" onclick={(event) => taskCommand(event, current, task, "pause")} title="Pause course fetch" aria-label="Pause course fetch"><Icon name="pause" /></button><button class="icon-button danger" onclick={(event) => taskCommand(event, current, task, "cancel")} title="Cancel course fetch" aria-label="Cancel course fetch"><Icon name="x" /></button>

@@ -15,8 +15,10 @@ function writeText(file, text) {
   fs.writeFileSync(file, text, "utf8");
 }
 
-function writeJson(file, value) {
-  writeText(file, `${JSON.stringify(value, null, 2)}\n`);
+function writeBuffer(context, file, buffer) {
+  if (context.writeBuffer) return context.writeBuffer(file, buffer);
+  ensureDir(path.dirname(file));
+  fs.writeFileSync(file, buffer);
 }
 
 function sha256(buffer) {
@@ -124,13 +126,12 @@ function recordArtifact(context, file, metadata) {
 }
 
 function writeArtifactText(context, file, text, metadata) {
-  writeText(file, text);
+  (context.writeText || writeText)(file, text);
   recordArtifact(context, file, metadata);
 }
 
 function writeArtifactJson(context, file, value, metadata) {
-  writeJson(file, value);
-  recordArtifact(context, file, metadata);
+  writeArtifactText(context, file, `${JSON.stringify(value, null, 2)}\n`, metadata);
 }
 
 function isoDate(value) {
@@ -605,6 +606,8 @@ function recordExternalDownload(context, file, buffer, metadata) {
     sha256: sha256(buffer),
     integrityVerified: true,
     externalSnapshot: true,
+    transferDisposition: metadata.placeholder ? "placeholder" : "downloaded",
+    networkBytes: metadata.placeholder ? 0 : buffer.length,
     ...(metadata.placeholder
       ? {
           placeholder: true,
@@ -655,7 +658,7 @@ function writeExternalPlaceholder(context, directory, fileName, metadata) {
     "utf8"
   );
   ensureDir(directory);
-  fs.writeFileSync(outPath, body);
+  writeBuffer(context, outPath, body);
   recordExternalDownload(context, outPath, body, {
     label: metadata.label || `${metadata.title || fileName} placeholder`,
     sourceUrl: metadata.sourceUrl,
@@ -773,7 +776,7 @@ async function archiveExternalLinks(context) {
       const extension = /html/i.test(contentType) ? ".html" : /json/i.test(contentType) ? ".json" : ".bin";
       const snapshotPath = path.join(link.directory, `external_snapshot${extension}`);
       ensureDir(link.directory);
-      fs.writeFileSync(snapshotPath, buffer);
+      writeBuffer(context, snapshotPath, buffer);
       recordExternalDownload(context, snapshotPath, buffer, {
         label: `${link.title} external snapshot`,
         sourceUrl: response.url,
@@ -820,7 +823,7 @@ async function archiveExternalLinks(context) {
               if (thumbnailResponse.ok) {
                 const thumbnail = Buffer.from(await thumbnailResponse.arrayBuffer());
                 const thumbnailPath = path.join(link.directory, "youtube_thumbnail.jpg");
-                fs.writeFileSync(thumbnailPath, thumbnail);
+                writeBuffer(context, thumbnailPath, thumbnail);
                 recordExternalDownload(context, thumbnailPath, thumbnail, {
                   label: `${link.title} thumbnail`,
                   sourceUrl: thumbnailResponse.url,
@@ -850,7 +853,7 @@ async function archiveExternalLinks(context) {
             if (captions.length) {
               const language = safePart(captionTrack.languageCode || "captions");
               const captionPath = path.join(link.directory, `youtube_captions_${language}.vtt`);
-              fs.writeFileSync(captionPath, captions);
+              writeBuffer(context, captionPath, captions);
               recordExternalDownload(context, captionPath, captions, {
                 label: `${link.title} captions (${language})`,
                 sourceUrl: `${link.url}#captions-${language}`,

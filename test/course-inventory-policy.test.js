@@ -64,3 +64,14 @@ test("inventory selection handles explicit IDs, availability, filters, and unkno
     /Course ID not present in memberships: missing/
   );
 });
+
+test("archive-only courses are excluded even when unavailable memberships are explicitly requested", () => {
+  const courses = [
+    { id: "archived", archiveOnly: true, membershipPresent: false, available: false, view: "ULTRA", term: { sourceName: "2025-26" } },
+    { id: "unavailable", archiveOnly: false, membershipPresent: true, available: false, view: "ULTRA", term: { sourceName: "2025-26" } },
+  ];
+  assert.deepEqual(applyCourseSelection(courses, { all: true, includeUnavailable: true }).map((item) => item.id), ["unavailable"]);
+  assert.deepEqual(applyCourseSelection(courses, { courseIds: ["archived"], includeUnavailable: true }), []);
+  assert.equal(courses[0].fetchStatus, "skipped: not in current memberships");
+  assert.equal(courses[0].selected, false);
+});

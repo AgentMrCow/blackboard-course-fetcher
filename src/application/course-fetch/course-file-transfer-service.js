@@ -129,6 +129,8 @@ class CourseFileTransferService {
       integrityVerified: true,
       placeholder: true,
       placeholderReason: reason,
+      transferDisposition: "placeholder",
+      networkBytes: 0,
     });
     this.manifest.transfer.placeholderFiles += 1;
     this.emitTransfer("placeholder", outputPath, size, label);
@@ -170,6 +172,8 @@ class CourseFileTransferService {
       unresolved: true,
       linkOnly: true,
       error: error.message,
+      transferDisposition: "unresolved",
+      networkBytes: 0,
     });
     this.manifest.transfer.unresolvedFiles += 1;
     this.manifest.errors.push({
@@ -213,6 +217,8 @@ class CourseFileTransferService {
       integrityVerified: true,
       skipped: true,
       cacheValidated: true,
+      transferDisposition: kind === "reused" ? "reused-local" : "reused-http304",
+      networkBytes: 0,
       ...(kind === "reused" ? { cacheValidation: "local SHA-256" } : {}),
     });
     this.manifest.transfer.reusedFiles += 1;
@@ -346,6 +352,9 @@ class CourseFileTransferService {
           integrityVerified: true,
           skipped: true,
           contentValidated: true,
+          // `skipped` describes the duplicate disk write, not the network request.
+          transferDisposition: "downloaded-identical",
+          networkBytes: streamed.size,
         });
         this.emitTransfer("identical", identical, streamed.size, label);
         this.logInfo(
@@ -374,6 +383,8 @@ class CourseFileTransferService {
         lastModified: response.headers.get("last-modified"),
         sha256: streamed.sha256,
         integrityVerified: true,
+        transferDisposition: "downloaded",
+        networkBytes: streamed.size,
       });
       this.emitTransfer("downloaded", outputPath, streamed.size, label);
       this.logInfo(

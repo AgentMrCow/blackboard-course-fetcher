@@ -20,6 +20,12 @@ const {
   effectiveArchiveCoverage,
 } = require("../../domain/archive/archive-coverage");
 
+function archivedAssessmentStatus(assessment) {
+  return assessment.grade?.submissionStatus || assessment.grade?.status ||
+    assessment.attempts?.at(-1)?.status ||
+    (assessment.recovery?.attemptHistoryUnavailable ? "UNKNOWN" : "NOT_STARTED");
+}
+
 class ArchiveService {
   constructor({ archiveRepository, clock = () => new Date() }) {
     if (!archiveRepository) throw new TypeError("ArchiveService requires an archiveRepository");
@@ -199,11 +205,13 @@ class ArchiveService {
     const gradebook = this.archiveRepository.readCourseJson(sourceCourse, ["gradebook.json"], manifest?.gradebook || null);
     const assessments = (manifest?.assessments || []).map((assessment) => ({
       ...assessment,
-      status: assessment.grade?.submissionStatus || assessment.grade?.status || assessment.attempts?.at(-1)?.status || "NOT_STARTED",
+      status: archivedAssessmentStatus(assessment),
       latestAttempt: assessment.attempts?.at(-1) || null,
     }));
-    const announcements = (manifest?.announcements || [])
-      .map((announcement) => this.loadAnnouncement(sourceCourse, announcement))
+    const announcementRecords = manifest?.announcements || [];
+    const announcements = (typeof this.archiveRepository.loadAnnouncements === "function"
+      ? this.archiveRepository.loadAnnouncements(sourceCourse, announcementRecords)
+      : announcementRecords.map((announcement) => this.loadAnnouncement(sourceCourse, announcement)))
       .sort((left, right) => String(right.postedAt || right.createdDate || "").localeCompare(String(left.postedAt || left.createdDate || "")));
     return {
       course,
@@ -245,7 +253,7 @@ class ArchiveService {
           courseName: course.name,
           title: assessment.title,
           dueDate: assessment.dueDate,
-          status: assessment.grade?.submissionStatus || assessment.grade?.status || assessment.attempts?.at(-1)?.status || "NOT_STARTED",
+          status: archivedAssessmentStatus(assessment),
           score: assessment.grade?.score ?? null,
           pointsPossible: assessment.grade?.pointsPossible ?? assessment.possiblePoints ?? null,
         });

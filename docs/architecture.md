@@ -105,7 +105,9 @@ Infrastructure implementations grouped by capability:
   course-inventory persistence, and contained access to archive inventories,
   manifests, course records, and files. The course-file store contains direct
   transfer writes, cache reads, hashes, version selection, and temporary-file
-  placement within one course output root, rejecting symlink escapes.
+  placement within one course output root, rejecting symlink escapes. Its opt-in
+  replacement history saves original bytes once per file per run, records hashes
+  in a journal, and completes that backup before atomically replacing an export.
 - `http`: a guarded dashboard router; focused workspace, archive, fetch-job, and
   static controllers; request parsing; JSON responses; archive file streaming;
   local request security; byte ranges; and an isolated server-sent-event client
@@ -179,6 +181,10 @@ quiz, feedback, and Classic submission browser automation returns plain results
 through focused gateways. The additional-area coordinator receives Achievements
 and Annotate captures through one shared browser-session gateway while retaining
 raw payloads, archive writing, classification, manifest, and coverage policy.
+Both coordinators share the same course-file store for generated exports and
+external snapshots. The runtime preserves the prior manifest before any exports,
+after the content-access probe and before legacy layout migration. This is
+recoverable replacement history, not atomic publication of an entire course.
 Neither composition module directly uses Playwright page or context APIs. Flags,
 archive schema, output, and the single-course worker protocol remain compatible.
 
@@ -202,6 +208,8 @@ Blackboard_Archive/
   courses.json
   <term>/<course>/manifest.json  # schema 9 includes artifact provenance
   <term>/<course>/<archived files>
+  <term>/<course>/.fetch-history/<run-id>/index.json
+  <term>/<course>/.fetch-history/<run-id>/files/<original relative paths>
 ```
 
 Dashboard runtime state is separate and disposable:
@@ -221,6 +229,10 @@ to a primary formatted representation and share a logical group key, preventing
 duplicate HTML/text results. Older indexes are rebuilt automatically; older
 course manifests are classified through backward-compatible inference and are
 not modified merely by opening the dashboard.
+Replacement history is excluded from file indexing and search; disk usage still
+includes it. History has no automatic retention cleanup. Inventory reconciliation
+retains previously indexed, matching local manifests when membership disappears,
+marking them archive-only and excluding them from new fetch selection.
 
 The saved Playwright storage state is a credential and remains outside the
 archive. It must never be committed or exposed through dashboard APIs.

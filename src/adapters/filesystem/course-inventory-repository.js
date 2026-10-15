@@ -55,7 +55,7 @@ class CourseInventoryRepository {
 
   readExistingArchive(outputPath) {
     try {
-      const manifest = JSON.parse(fs.readFileSync(path.join(this.assertContained(outputPath), "manifest.json"), "utf8"));
+      const manifest = JSON.parse(fs.readFileSync(this.assertContained(path.join(outputPath, "manifest.json")), "utf8"));
       return {
         generatedAt: manifest.generatedAt || null,
         downloadMode: manifest.downloadMode || "full",
@@ -67,6 +67,49 @@ class CourseInventoryRepository {
       if (error.message === "Course inventory path is outside the archive root") throw error;
       return null;
     }
+  }
+
+  readArchivedCourses() {
+    const indexPath = this.assertContained(path.join(this.archiveRoot, "courses.json"));
+    if (!fs.existsSync(indexPath)) return [];
+    let index;
+    try {
+      index = JSON.parse(fs.readFileSync(indexPath, "utf8"));
+      if (!Array.isArray(index.courses)) throw new Error("courses must be an array");
+    } catch (error) {
+      throw new Error(`Cannot refresh an unreadable course inventory: ${error.message}`);
+    }
+
+    const archived = [];
+    const seen = new Set();
+    for (const course of index.courses) {
+      if (!course?.id || typeof course.outputDirectory !== "string" || !course.outputDirectory || seen.has(course.id)) continue;
+      const location = this.courseLocation([course.outputDirectory.replace(/\\/g, "/")]);
+      const manifestPath = this.assertContained(path.join(location.outputPath, "manifest.json"));
+      if (!fs.existsSync(manifestPath)) continue;
+      let manifest;
+      try {
+        manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      } catch (error) {
+        // An unreadable manifest is not evidence that an archive was removed.
+        throw new Error(`Cannot inspect archived course ${course.id}: ${error.message}`);
+      }
+      if ((manifest.courseId || manifest.course?.id) !== course.id) continue;
+      const existingArchive = this.readExistingArchive(location.outputPath);
+      archived.push({
+        id: course.id,
+        externalId: course.externalId || null,
+        name: course.name || manifest.course?.displayName || manifest.course?.name || course.id,
+        term: { ...course.term, name: course.term?.name || "No Term", sourceName: course.term?.sourceName || course.term?.name || "No Term" },
+        view: course.view || "UNKNOWN",
+        hidden: course.hidden === true,
+        lastAccessDate: course.lastAccessDate || null,
+        ...location,
+        existingArchive,
+      });
+      seen.add(course.id);
+    }
+    return archived;
   }
 
   save(index) {
@@ -82,6 +125,8 @@ class CourseInventoryRepository {
       "",
       `Generated: ${index.generatedAt}`,
       `Courses in inventory: ${index.courses.length}`,
+      `Current memberships: ${index.courses.filter((course) => course.membershipPresent !== false).length}`,
+      `Local archives without current membership: ${index.courses.filter((course) => course.archiveOnly).length}`,
       `Selected this run: ${index.courses.filter((course) => course.selected).length}`,
       `Download mode: ${index.downloadMode}`,
       "",

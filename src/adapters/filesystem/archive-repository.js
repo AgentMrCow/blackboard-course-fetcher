@@ -24,6 +24,21 @@ function isInside(root, candidate) {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function resolveFilesAtLocation(course, { root, realRoot }, relativePaths) {
+  return relativePaths.map((relativePath) => {
+    const normalized = normalizeArchivePath(relativePath).replace(/^\/+/, "");
+    const candidate = path.resolve(root, normalized);
+    if (!normalized || !isInside(root, candidate)) throw httpError(400, "Invalid archive file path");
+    if (fs.existsSync(candidate)) {
+      const realCandidate = fs.realpathSync.native(candidate);
+      if (!isInside(realRoot || fs.realpathSync.native(root), realCandidate)) {
+        throw httpError(400, "Archive file resolves outside the course directory");
+      }
+    }
+    return { course, root, file: candidate, relativePath: normalized };
+  });
+}
+
 function directorySize(directory) {
   let bytes = 0;
   let files = 0;
@@ -83,18 +98,25 @@ class FileSystemArchiveRepository {
   }
 
   coursePath(course) {
-    const outputDirectory = String(course.outputDirectory || "");
+    return this.courseLocation(course).root;
+  }
+
+  courseLocation(course) {
+    const outputDirectory = normalizeArchivePath(course.outputDirectory);
     const candidate = path.resolve(this.archiveRoot, outputDirectory);
     const relative = path.relative(this.archiveRoot, candidate);
     if (!outputDirectory || !relative || !isInside(this.archiveRoot, candidate)) {
       throw new Error(`Unsafe or missing archive path for ${course.id}`);
     }
+    let realRoot = null;
     if (fs.existsSync(candidate) && fs.existsSync(this.archiveRoot)) {
-      const realRoot = fs.realpathSync(this.archiveRoot);
-      const realCandidate = fs.realpathSync(candidate);
-      if (!isInside(realRoot, realCandidate)) throw new Error(`Unsafe or missing archive path for ${course.id}`);
+      // Native resolution avoids walking every path component through JavaScript,
+      // which is especially expensive on network and WSL-mounted archives.
+      const realArchive = fs.realpathSync.native(this.archiveRoot);
+      realRoot = fs.realpathSync.native(candidate);
+      if (!isInside(realArchive, realRoot)) throw new Error(`Unsafe or missing archive path for ${course.id}`);
     }
-    return candidate;
+    return { root: candidate, realRoot };
   }
 
   courseExists(course) {
@@ -119,18 +141,11 @@ class FileSystemArchiveRepository {
   }
 
   resolveCourseFile(course, relativePath) {
-    const root = this.coursePath(course);
-    const normalized = String(relativePath || "").replace(/^[/\\]+/, "");
-    const candidate = path.resolve(root, normalized);
-    if (!normalized || !isInside(root, candidate)) throw httpError(400, "Invalid archive file path");
-    if (fs.existsSync(candidate)) {
-      const realRoot = fs.realpathSync(root);
-      const realCandidate = fs.realpathSync(candidate);
-      if (!isInside(realRoot, realCandidate)) {
-        throw httpError(400, "Archive file resolves outside the course directory");
-      }
-    }
-    return { course, root, file: candidate, relativePath: normalizeArchivePath(normalized) };
+    return this.resolveCourseFiles(course, [relativePath])[0];
+  }
+
+  resolveCourseFiles(course, relativePaths) {
+    return resolveFilesAtLocation(course, this.courseLocation(course), relativePaths);
   }
 
   scanCourseFiles(course, { includeSearchDocuments = false } = {}) {
@@ -157,6 +172,7 @@ class FileSystemArchiveRepository {
         const fullPath = path.join(current, entry.name);
         if (entry.isSymbolicLink()) continue;
         if (entry.isDirectory()) {
+          if (current === root && entry.name === ".fetch-history") continue;
           pending.push(fullPath);
           continue;
         }
@@ -220,19 +236,34 @@ class FileSystemArchiveRepository {
   }
 
   loadAnnouncement(course, announcement) {
-    if (!announcement.directory) return { ...announcement, text: "", htmlPath: null };
+    return this.loadAnnouncements(course, [announcement])[0];
+  }
+
+  loadAnnouncements(course, announcements) {
+    if (!announcements.length) return [];
+    let location;
     try {
-      const textPath = `${normalizeArchivePath(announcement.directory)}/announcement.txt`;
-      const htmlPath = `${normalizeArchivePath(announcement.directory)}/announcement.html`;
-      const resolvedHtml = this.resolveCourseFile(course, htmlPath);
-      return {
-        ...announcement,
-        text: this.readCourseText(course, textPath, "").trim(),
-        htmlPath: fs.existsSync(resolvedHtml.file) ? htmlPath : null,
-      };
+      // Share the checked boundary only within this synchronous batch, never
+      // across requests. Every announcement target still gets its own check.
+      location = this.courseLocation(course);
     } catch {
-      return { ...announcement, text: "", htmlPath: null };
+      return announcements.map((announcement) => ({ ...announcement, text: "", htmlPath: null }));
     }
+    return announcements.map((announcement) => {
+      if (!announcement.directory) return { ...announcement, text: "", htmlPath: null };
+      try {
+        const textPath = `${normalizeArchivePath(announcement.directory)}/announcement.txt`;
+        const htmlPath = `${normalizeArchivePath(announcement.directory)}/announcement.html`;
+        const [resolvedText, resolvedHtml] = resolveFilesAtLocation(course, location, [textPath, htmlPath]);
+        return {
+          ...announcement,
+          text: readText(resolvedText.file, "").trim(),
+          htmlPath: fs.existsSync(resolvedHtml.file) ? htmlPath : null,
+        };
+      } catch {
+        return { ...announcement, text: "", htmlPath: null };
+      }
+    });
   }
 }
 

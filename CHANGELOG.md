@@ -7,6 +7,25 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Per-refresh replacement history for previous manifests, metadata exports, and
+  external snapshots, with original paths and SHA-256 hashes for recovery.
+- Explicit per-file transfer dispositions and current-attempt download counters.
+- Released grade-level instructor feedback exports and dashboard display.
+
+### Fixed
+
+- Stop on explicit membership denial before modifying course exports or migrating
+  legacy archive directories; retain locally archived courses during inventory refresh.
+- Preserve old bytes before replacing generated files and write replacements atomically.
+- Count identical-body downloads as network transfers, include fallback snapshots
+  in progress totals, and reset transfer counters when a retry starts a new worker.
+- Recognize text-only submissions and distinguish unrecovered metadata from
+  unsubmitted, ungraded, or undated work.
+- Reduce repeated path resolution when loading announcements while checking each
+  file for symlink escapes; omit replacement history from file listings and search.
+
 ## [0.2.0] - 2026-07-23
 
 ### Added
