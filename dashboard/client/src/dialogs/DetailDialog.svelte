@@ -2,7 +2,7 @@
   import Icon from "../components/Icon.svelte";
   import Modal from "../components/Modal.svelte";
   import StatusBadge from "../components/StatusBadge.svelte";
-  import { appState, changeState, navigate, openFile, openFetch, reportError } from "../lib/controller";
+  import { appState, closeDetails, navigate, openFile, openFetch, reportError } from "../lib/controller";
   import { assessmentStatus, fileIconName, formatBytes, formatDate, relativeTime, titleCase } from "../lib/format";
 
   $: dialog = $appState.detailDialog;
@@ -10,7 +10,7 @@
   $: announcement = dialog.kind === "announcement" ? dialog.item : null;
 
   function close() {
-    changeState((state) => state.detailDialog.open = false);
+    closeDetails();
   }
 
   function openCourse(courseId: string) {

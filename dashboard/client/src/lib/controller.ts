@@ -1,10 +1,55 @@
-import { api } from "./api";
+import { api, requestText } from "./api";
 import { fileEndpoint } from "./format";
-import { appState, changeState, navigate, readState, routeFromHash, showToast } from "./state";
-import type { AppState, ArchiveFile, Bootstrap, CourseDetail, FetchBatch, FileDialogState, FilePage, FileScope, JsonRecord, SearchResult } from "./types";
+import { appState, changeState, navigate as navigateTo, readState, routeFromHash, showToast } from "./state";
+import type { AppState, ArchiveFile, Bootstrap, CourseDetail, DetailDialogState, FetchBatch, FileDialogState, FilePage, FileScope, JsonRecord, SearchResult } from "./types";
 
 let events: EventSource | null = null;
 let fileLoadSequence = 0;
+let searchSequence = 0;
+let bootstrapSequence = 0;
+let detailOpenSequence = 0;
+const courseRequests = new Map<string, { token: symbol; request: Promise<CourseDetail> }>();
+const liveRevisions = new Map<keyof Bootstrap, number>();
+
+export function closeDetails(): void {
+  detailOpenSequence += 1;
+  changeState((state) => state.detailDialog.open = false);
+}
+
+function navigate(path: string): void {
+  closeDetails();
+  navigateTo(path);
+}
+
+function beginDetailOpen(): () => boolean {
+  const sequence = ++detailOpenSequence;
+  const route = readState().route;
+  const hash = window.location?.hash;
+  return () => sequence === detailOpenSequence && readState().route === route && window.location?.hash === hash;
+}
+
+async function detailCourse(courseId: string, isCurrent: () => boolean): Promise<CourseDetail | null> {
+  try {
+    const detail = await ensureCourse(courseId);
+    return isCurrent() ? detail : null;
+  } catch (error) {
+    if (isCurrent()) throw error;
+    return null;
+  }
+}
+
+function markLiveUpdate(key: keyof Bootstrap): void {
+  liveRevisions.set(key, (liveRevisions.get(key) || 0) + 1);
+}
+
+function invalidateArchiveViews(state: AppState): void {
+  courseRequests.clear();
+  state.courseCache.clear();
+  fileLoadSequence += 1;
+  state.allFiles = null;
+  state.filesLoading = false;
+  state.filesError = "";
+}
 
 export function activeBatch(bootstrap = readState().bootstrap): FetchBatch | null {
   return bootstrap?.jobs?.find((job) => ["queued", "running", "paused"].includes(job.status)) || null;
@@ -25,9 +70,24 @@ export function filteredCourses() {
 export async function ensureCourse(courseId: string, force = false): Promise<CourseDetail> {
   const cached = readState().courseCache.get(courseId);
   if (!force && cached) return cached;
-  const detail = await api<CourseDetail>(`/api/courses/${encodeURIComponent(courseId)}`);
-  changeState((state) => state.courseCache.set(courseId, detail));
-  return detail;
+  const pending = courseRequests.get(courseId);
+  if (!force && pending) return pending.request;
+  const token = Symbol(courseId);
+  const request: Promise<CourseDetail> = (async () => {
+    try {
+      const detail = await api<CourseDetail>(`/api/courses/${encodeURIComponent(courseId)}`);
+      if (courseRequests.get(courseId)?.token !== token) return courseRequests.get(courseId)?.request || ensureCourse(courseId);
+      changeState((state) => state.courseCache.set(courseId, detail));
+      return detail;
+    } catch (error) {
+      if (courseRequests.get(courseId)?.token !== token) return courseRequests.get(courseId)?.request || ensureCourse(courseId);
+      throw error;
+    } finally {
+      if (courseRequests.get(courseId)?.token === token) courseRequests.delete(courseId);
+    }
+  })();
+  courseRequests.set(courseId, { token, request });
+  return request;
 }
 
 function pruneCourseSelection(state: AppState): void {
@@ -40,15 +100,31 @@ function pruneCourseSelection(state: AppState): void {
 }
 
 export async function refreshBootstrap(showSuccess = false): Promise<void> {
-  const bootstrap = await api<Bootstrap>(`/api/bootstrap${showSuccess ? "?refresh=1" : ""}`);
+  const sequence = ++bootstrapSequence;
+  const revisions = new Map(liveRevisions);
+  let bootstrap: Bootstrap;
+  try {
+    bootstrap = await api<Bootstrap>(`/api/bootstrap${showSuccess ? "?refresh=1" : ""}`);
+  } catch (error) {
+    if (sequence !== bootstrapSequence) return;
+    throw error;
+  }
+  if (sequence !== bootstrapSequence) return;
+  if (!bootstrap || typeof bootstrap !== "object" || !Array.isArray(bootstrap.inventory?.courses)) {
+    throw new Error("The dashboard returned an invalid workspace response. Check the local dashboard server and refresh the page.");
+  }
   changeState((state) => {
+    // A live event received after this request began is newer than its snapshot.
+    for (const [key, revision] of liveRevisions) {
+      if (state.bootstrap && revision !== revisions.get(key)) bootstrap[key] = state.bootstrap[key];
+    }
     state.bootstrap = bootstrap;
     pruneCourseSelection(state);
-    state.courseCache.clear();
-    state.allFiles = null;
+    invalidateArchiveViews(state);
     state.loading = false;
     state.fatalError = "";
   });
+  if (readState().connectionStatus === "offline" && (!events || events.readyState === EventSource.CLOSED)) connectEvents();
   if (showSuccess) showToast("Local archive data refreshed.", "success");
 }
 
@@ -69,7 +145,7 @@ export async function loadAllFiles(force = false): Promise<void> {
   const state = readState();
   if (!force && (state.filesLoading || state.allFiles)) return;
   const sequence = ++fileLoadSequence;
-  changeState((current) => current.filesLoading = true);
+  changeState((current) => { current.filesLoading = true; current.filesError = ""; });
   try {
     while (sequence === fileLoadSequence) {
       const params = fileListParameters().toString();
@@ -79,6 +155,7 @@ export async function loadAllFiles(force = false): Promise<void> {
       } catch (error) {
         if (sequence !== fileLoadSequence) return;
         if (params !== fileListParameters().toString()) continue;
+        changeState((current) => current.filesError = error instanceof Error ? error.message : String(error));
         throw error;
       }
       if (sequence !== fileLoadSequence) return;
@@ -96,10 +173,12 @@ export function setFileFilters(values: Partial<{ query: string; preview: string;
     Object.assign(state.fileFilters, values);
     state.filePage = 0;
     state.allFiles = null;
+    state.filesError = "";
   });
 }
 
 export function openSetup(step: number | null = null): void {
+  closeDetails();
   const state = readState();
   if (!state.bootstrap) return;
   const completion = setupCompletion(state.bootstrap);
@@ -121,6 +200,7 @@ export function setupCompletion(bootstrap: Bootstrap): boolean[] {
 }
 
 export function openFetch(courseIds: string[]): void {
+  closeDetails();
   const state = readState();
   const unique = [...new Set(courseIds)].filter((id) => state.bootstrap?.inventory.courses.some((course) => course.id === id));
   if (!unique.length) {
@@ -150,6 +230,7 @@ export async function startFetch(payload: JsonRecord): Promise<void> {
     method: "POST",
     body: { ...payload, courseIds: state.fetchCourseIds },
   });
+  markLiveUpdate("jobs");
   changeState((current) => {
     if (current.bootstrap && !current.bootstrap.jobs.some((job) => job.id === batch.id)) {
       current.bootstrap.jobs.unshift(batch);
@@ -173,6 +254,7 @@ export async function saveSettings(form: HTMLFormElement): Promise<void> {
       attachmentConcurrency: Number(data.get("attachmentConcurrency")),
     },
   });
+  markLiveUpdate("settings");
   changeState((state) => {
     if (state.bootstrap) state.bootstrap.settings = settings;
   });
@@ -181,7 +263,8 @@ export async function saveSettings(form: HTMLFormElement): Promise<void> {
 }
 
 export async function checkAuth(): Promise<void> {
-  const auth = await api<JsonRecord>("/api/auth/check", { method: "POST" });
+  const auth = await api<JsonRecord>("/api/auth/check", { method: "POST", timeoutMs: 90_000 });
+  markLiveUpdate("auth");
   changeState((state) => {
     if (state.bootstrap) state.bootstrap.auth = auth;
   });
@@ -190,6 +273,7 @@ export async function checkAuth(): Promise<void> {
 
 export async function authAction(action: "start" | "save" | "cancel"): Promise<void> {
   const auth = await api<JsonRecord>(`/api/auth/${action}`, { method: "POST" });
+  markLiveUpdate("auth");
   changeState((state) => {
     if (state.bootstrap) state.bootstrap.auth = auth;
   });
@@ -197,6 +281,7 @@ export async function authAction(action: "start" | "save" | "cancel"): Promise<v
 
 export async function runInventory(): Promise<void> {
   const task = await api<JsonRecord>("/api/inventory", { method: "POST" });
+  markLiveUpdate("inventoryTask");
   changeState((state) => {
     if (state.bootstrap) state.bootstrap.inventoryTask = task;
   });
@@ -205,6 +290,7 @@ export async function runInventory(): Promise<void> {
 
 export async function cancelInventory(): Promise<void> {
   const task = await api<JsonRecord>("/api/inventory/cancel", { method: "POST" });
+  markLiveUpdate("inventoryTask");
   changeState((state) => {
     if (state.bootstrap) state.bootstrap.inventoryTask = task;
   });
@@ -221,6 +307,7 @@ export async function controlTask(batchId: string, courseId: string, action: str
 }
 
 function replaceBatch(batch: FetchBatch): void {
+  markLiveUpdate("jobs");
   changeState((state) => {
     if (!state.bootstrap) return;
     const index = state.bootstrap.jobs.findIndex((item) => item.id === batch.id);
@@ -256,22 +343,20 @@ function fileMeta(courseId: string, filePath: string): ArchiveFile {
     };
 }
 
-export async function openFile(courseId: string, filePath: string): Promise<void> {
-  const file = fileMeta(courseId, filePath);
+export async function openFile(courseId: string, filePath: string, metadata?: ArchiveFile): Promise<void> {
+  closeDetails();
+  const file = metadata?.path === filePath ? metadata : fileMeta(courseId, filePath);
   const dialog: FileDialogState = { open: true, loading: true, courseId, file, text: "", parsed: null, link: "", error: "" };
   changeState((state) => {
     state.fileDialog = dialog;
-    state.detailDialog.open = false;
   });
   if (!["text", "json", "link", "placeholder", "unresolved"].includes(file.preview)) {
     changeState((state) => state.fileDialog.loading = false);
     return;
   }
   try {
-    const response = await fetch(fileEndpoint(courseId, filePath));
+    let text = await requestText(fileEndpoint(courseId, filePath));
     if (readState().fileDialog !== dialog || !dialog.open) return;
-    if (!response.ok) throw new Error(`Unable to read file: HTTP ${response.status}`);
-    let text = await response.text();
     let parsed: JsonRecord | null = null;
     if (["json", "placeholder", "unresolved"].includes(file.preview)) {
       try {
@@ -295,7 +380,9 @@ export async function openFile(courseId: string, filePath: string): Promise<void
 }
 
 export async function openAssignment(courseId: string, contentId: string): Promise<void> {
-  const detail = await ensureCourse(courseId);
+  const isCurrent = beginDetailOpen();
+  const detail = await detailCourse(courseId, isCurrent);
+  if (!detail || !isCurrent()) return;
   const assessment = detail.assessments.find((item) => String(item.contentId || item.columnId) === String(contentId));
   if (!assessment) throw new Error("Assessment details were not found in the local manifest");
   const relatedFiles = detail.files.filter((file) => assessment.directory && (file.path === assessment.directory || file.path.startsWith(`${assessment.directory}/`)));
@@ -306,33 +393,37 @@ export async function openAssignment(courseId: string, contentId: string): Promi
   const instructionHtmlPath = assessment.instructions?.htmlPath
     || instructionFile?.primaryPath
     || relatedFiles.find((file) => file.role === "instructions-rendered")?.path;
-  changeState((state) => {
-    state.detailDialog = {
-      open: true,
-      kind: "assignment",
-      eyebrow: `${detail.course.code} · ${assessment.isGroup ? "Group" : "Individual"} assessment`,
-      title: assessment.title,
-      courseDetail: detail,
-      item: assessment,
-      files,
-      instructions: instructionFile ? "Loading archived instructions..." : "No plain-text instructions file was found.",
-      instructionHtmlPath,
-    };
-  });
+  const dialog: DetailDialogState = {
+    open: true,
+    kind: "assignment",
+    eyebrow: `${detail.course.code} · ${assessment.isGroup ? "Group" : "Individual"} assessment`,
+    title: assessment.title,
+    courseDetail: detail,
+    item: assessment,
+    files,
+    instructions: instructionFile ? "Loading archived instructions..." : "No plain-text instructions file was found.",
+    instructionHtmlPath,
+  };
+  changeState((state) => { state.detailDialog = dialog; });
   if (instructionFile) {
-    fetch(fileEndpoint(courseId, instructionFile.path))
-      .then((response) => response.text())
+    requestText(fileEndpoint(courseId, instructionFile.path))
       .then((text) => changeState((state) => {
-        if (state.detailDialog.kind === "assignment" && state.detailDialog.item === assessment) {
+        if (isCurrent() && state.detailDialog === dialog && dialog.open) {
           state.detailDialog.instructions = text.trim() || "The archived instructions file is empty.";
         }
       }))
-      .catch(() => undefined);
+      .catch((error) => changeState((state) => {
+        if (isCurrent() && state.detailDialog === dialog && dialog.open) {
+          state.detailDialog.instructions = `Unable to load archived instructions: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      }));
   }
 }
 
 export async function openAnnouncement(courseId: string, announcementId: string): Promise<void> {
-  const detail = await ensureCourse(courseId);
+  const isCurrent = beginDetailOpen();
+  const detail = await detailCourse(courseId, isCurrent);
+  if (!detail || !isCurrent()) return;
   const announcement = detail.announcements.find((item) => String(item.id) === String(announcementId));
   if (!announcement) throw new Error("Announcement was not found in the local manifest");
   changeState((state) => {
@@ -348,6 +439,7 @@ export async function openAnnouncement(courseId: string, announcementId: string)
 }
 
 export function openCourseDetails(courseId: string): void {
+  closeDetails();
   const course = readState().bootstrap?.inventory.courses.find((item) => item.id === courseId);
   if (!course) return;
   changeState((state) => {
@@ -356,7 +448,9 @@ export function openCourseDetails(courseId: string): void {
 }
 
 export async function openCalendarItem(courseId: string, title: string): Promise<void> {
-  const detail = await ensureCourse(courseId);
+  const isCurrent = beginDetailOpen();
+  const detail = await detailCourse(courseId, isCurrent);
+  if (!detail || !isCurrent()) return;
   const assessment = detail.assessments.find((item) => item.title === title || item.effectiveTitle === title);
   if (assessment) {
     await openAssignment(courseId, assessment.contentId || assessment.columnId);
@@ -366,6 +460,7 @@ export async function openCalendarItem(courseId: string, title: string): Promise
 }
 
 export async function searchArchive(query: string): Promise<void> {
+  const sequence = ++searchSequence;
   changeState((state) => {
     state.searchQuery = query;
     state.searchLoading = query.trim().length >= 2;
@@ -374,18 +469,21 @@ export async function searchArchive(query: string): Promise<void> {
   if (query.trim().length < 2) return;
   try {
     const response = await api<{ results: SearchResult[] }>(`/api/search?q=${encodeURIComponent(query)}&limit=80`);
-    if (readState().searchQuery !== query) return;
+    if (sequence !== searchSequence || readState().searchQuery !== query) return;
     changeState((state) => {
       state.searchResults = response.results;
       state.searchLoading = false;
     });
   } catch (error) {
+    if (sequence !== searchSequence || readState().searchQuery !== query) return;
     changeState((state) => state.searchLoading = false);
     throw error;
   }
 }
 
 export function openSearch(): void {
+  closeDetails();
+  searchSequence += 1;
   changeState((state) => {
     state.searchOpen = true;
     state.searchQuery = "";
@@ -396,57 +494,101 @@ export function openSearch(): void {
 
 function connectEvents(): void {
   events?.close();
-  events = new EventSource("/api/events");
-  events.addEventListener("jobs", async (event) => {
+  const source = new EventSource("/api/events");
+  events = source;
+  changeState((state) => state.connectionStatus = "connecting");
+  const listen = <T>(name: string, handle: (payload: T) => void | Promise<void>) => {
+    source.addEventListener(name, (event) => {
+      if (events !== source) return;
+      let payload: T;
+      try {
+        payload = JSON.parse((event as MessageEvent).data);
+        const valid = name === "jobs" ? Array.isArray(payload)
+          : payload !== null && typeof payload === "object" && !Array.isArray(payload)
+            && (name !== "inventory" || Array.isArray((payload as JsonRecord).courses));
+        if (!valid) throw new Error("Invalid event payload");
+      }
+      catch {
+        showToast("A dashboard update could not be read. Refresh local data to resync.", "error");
+        return;
+      }
+      Promise.resolve().then(() => {
+        if (events === source) return handle(payload);
+      }).catch((error) => {
+        if (events === source) reportError(error);
+      });
+    });
+  };
+  source.addEventListener("open", () => {
+    if (events !== source) return;
+    changeState((state) => state.connectionStatus = "connected");
+    // The event stream does not replay missed updates, including the startup gap.
+    refreshBootstrap().catch((error) => {
+      if (events === source) reportError(error);
+    });
+  });
+  source.addEventListener("error", () => {
+    if (events !== source) return;
+    changeState((state) => state.connectionStatus = source.readyState === EventSource.CLOSED ? "offline" : "reconnecting");
+  });
+  listen<FetchBatch[]>("jobs", async (jobs) => {
     const hadActive = Boolean(activeBatch());
-    const jobs = JSON.parse(event.data) as FetchBatch[];
+    markLiveUpdate("jobs");
     changeState((state) => {
       if (state.bootstrap) state.bootstrap.jobs = jobs;
     });
-    if (hadActive && !activeBatch()) {
-      const [inventory, summary] = await Promise.all([
-        api<JsonRecord>("/api/courses").catch(() => null),
-        api<JsonRecord>("/api/summary").catch(() => null),
-      ]);
-      changeState((state) => {
-        if (!state.bootstrap) return;
-        if (inventory) state.bootstrap.inventory = inventory as Bootstrap["inventory"];
-        if (summary) state.bootstrap.summary = summary;
-        state.courseCache.clear();
-        state.allFiles = null;
-      });
-    }
+    if (hadActive && !activeBatch()) await refreshBootstrap();
   });
-  events.addEventListener("auth", (event) => changeState((state) => {
-    if (state.bootstrap) state.bootstrap.auth = JSON.parse(event.data);
-  }));
-  events.addEventListener("inventory-task", (event) => changeState((state) => {
-    if (state.bootstrap) state.bootstrap.inventoryTask = JSON.parse(event.data);
-  }));
-  events.addEventListener("inventory", async (event) => {
-    const inventory = JSON.parse(event.data);
-    const summary = await api<JsonRecord>("/api/summary").catch(() => null);
+  listen<JsonRecord>("auth", (auth) => {
+    markLiveUpdate("auth");
+    changeState((state) => { if (state.bootstrap) state.bootstrap.auth = auth; });
+  });
+  listen<JsonRecord>("inventory-task", (task) => {
+    markLiveUpdate("inventoryTask");
+    changeState((state) => { if (state.bootstrap) state.bootstrap.inventoryTask = task; });
+  });
+  listen<Bootstrap["inventory"]>("inventory", async (inventory) => {
+    markLiveUpdate("inventory");
+    const revision = liveRevisions.get("inventory");
+    const summaryRevision = liveRevisions.get("summary");
     changeState((state) => {
       if (!state.bootstrap) return;
       state.bootstrap.inventory = inventory;
       pruneCourseSelection(state);
-      if (summary) state.bootstrap.summary = summary;
-      state.courseCache.clear();
-      state.allFiles = null;
+      invalidateArchiveViews(state);
+    });
+    let summary: JsonRecord;
+    try { summary = await api<JsonRecord>("/api/summary"); }
+    catch (error) {
+      if (events !== source || revision !== liveRevisions.get("inventory") || summaryRevision !== liveRevisions.get("summary")) return;
+      throw error;
+    }
+    if (events !== source || revision !== liveRevisions.get("inventory") || summaryRevision !== liveRevisions.get("summary")) return;
+    markLiveUpdate("summary");
+    changeState((state) => { if (state.bootstrap) state.bootstrap.summary = summary; });
+  });
+  listen<JsonRecord>("file-index", (index) => {
+    markLiveUpdate("fileIndex");
+    changeState((state) => {
+      if (!state.bootstrap) return;
+      state.bootstrap.fileIndex = index;
+      if (index.status === "complete") {
+        fileLoadSequence += 1;
+        state.allFiles = null;
+        state.filesLoading = false;
+        state.filesError = "";
+      }
     });
   });
-  events.addEventListener("file-index", (event) => changeState((state) => {
-    if (!state.bootstrap) return;
-    state.bootstrap.fileIndex = JSON.parse(event.data);
-    if (state.bootstrap.fileIndex.status === "complete") state.allFiles = null;
-  }));
-  events.addEventListener("summary", (event) => changeState((state) => {
-    if (state.bootstrap) state.bootstrap.summary = JSON.parse(event.data);
-  }));
+  listen<JsonRecord>("summary", (summary) => {
+    markLiveUpdate("summary");
+    changeState((state) => { if (state.bootstrap) state.bootstrap.summary = summary; });
+  });
 }
 
 export async function initialize(): Promise<() => void> {
   const onHashChange = () => {
+    closeDetails();
     changeState((state) => {
       state.route = routeFromHash();
       state.mobileNavOpen = false;
@@ -467,10 +609,13 @@ export async function initialize(): Promise<() => void> {
     changeState((state) => {
       state.loading = false;
       state.fatalError = error instanceof Error ? error.message : String(error);
+      state.connectionStatus = "offline";
     });
   }
   return () => {
     events?.close();
+    events = null;
+    bootstrapSequence += 1;
     window.removeEventListener("hashchange", onHashChange);
   };
 }

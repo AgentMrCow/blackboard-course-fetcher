@@ -56,6 +56,35 @@ export interface CourseDetail extends JsonRecord {
   manifest?: JsonRecord;
 }
 
+export interface ArchiveHistoryRun {
+  id: string;
+  createdAt: string | null;
+  fileCount: number;
+  totalBytes: number;
+  status: "available" | "warning" | "unreadable";
+  warnings: string[];
+}
+
+export interface ArchiveHistoryFile {
+  path: string;
+  backupPath: string | null;
+  size: number;
+  sha256: string;
+  preservedAt: string | null;
+  status: "available" | "missing" | "unsafe" | "changed";
+}
+
+export interface ArchiveHistoryList {
+  runs: ArchiveHistoryRun[];
+  truncated: boolean;
+  warnings: string[];
+}
+
+export interface ArchiveHistoryDetail extends ArchiveHistoryRun {
+  files: ArchiveHistoryFile[];
+  truncated: boolean;
+}
+
 export interface FetchTask extends JsonRecord {
   id: string;
   courseId: string;
@@ -160,6 +189,7 @@ export interface FileDialogState {
 
 export interface AppState {
   bootstrap: Bootstrap | null;
+  connectionStatus: "connecting" | "connected" | "reconnecting" | "offline";
   loading: boolean;
   fatalError: string;
   route: RouteState;
@@ -169,6 +199,7 @@ export interface AppState {
   fileFilters: { query: string; preview: string; courseId: string; scope: FileScope };
   allFiles: FilePage | null;
   filesLoading: boolean;
+  filesError: string;
   filePage: number;
   filePageSize: number;
   fileView: "table" | "grid";

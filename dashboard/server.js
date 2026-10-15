@@ -153,6 +153,14 @@ class DashboardServer {
     return this.archiveService.getCourse(courseId);
   }
 
+  courseHistory(courseId) {
+    return this.archiveService.getHistory(courseId);
+  }
+
+  courseHistoryRun(courseId, runId) {
+    return this.archiveService.getHistoryRun(courseId, runId);
+  }
+
   resolveArchiveFile(courseId, relativePath) {
     return this.archiveService.resolveCourseFile(courseId, relativePath);
   }

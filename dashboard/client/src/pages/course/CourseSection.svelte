@@ -4,6 +4,7 @@
   import FileCollection from "../../components/FileCollection.svelte";
   import Icon from "../../components/Icon.svelte";
   import StatusBadge from "../../components/StatusBadge.svelte";
+  import ArchiveHistory from "./ArchiveHistory.svelte";
   import { appState, changeState, openAssignment, openFile, reportError } from "../../lib/controller";
   import { assessmentStatus, contentIcon, courseFileByPath, courseGradeSummary, fileMatchesScope, formatBytes, formatDate, formatDuration, initials, titleCase } from "../../lib/format";
   import type { CourseDetail, FileScope } from "../../lib/types";
@@ -112,6 +113,8 @@
 {:else if tab === "files"}
   <div class="file-toolbar"><div class="filter-input"><Icon name="search" /><input type="search" placeholder="Filter this course's files" value={fileQuery} oninput={(event) => updateCourseFileFilter({ query: event.currentTarget.value })} /></div><select class="select" value={fileScope} onchange={(event) => updateCourseFileFilter({ scope: event.currentTarget.value as FileScope })}><option value="materials">Course materials</option><option value="exports">Content exports</option><option value="records">Archive records</option><option value="all">All physical files</option></select><select class="select" value={filePreview} onchange={(event) => updateCourseFileFilter({ preview: event.currentTarget.value })}><option value="all">All file types</option>{#each ["pdf", "office", "image", "video", "audio", "html", "text", "json", "placeholder", "archive"] as value}<option {value}>{titleCase(value)}</option>{/each}</select><div class="segmented-control"><button class:active={$appState.fileView === "table"} onclick={() => changeState((state) => state.fileView = "table")} title="List view" aria-label="List view"><Icon name="list" /></button><button class:active={$appState.fileView === "grid"} onclick={() => changeState((state) => state.fileView = "grid")} title="Grid view" aria-label="Grid view"><Icon name="grid-2x2" /></button></div><span class="selection-count">{filteredFiles.length} files</span></div>
   {#if filteredFiles.length}<FileCollection files={filteredFiles} courseId={course.id} view={$appState.fileView} openFile={(id, path) => openFile(id, path).catch(reportError)} />{:else}<EmptyState icon="file-search" title="No matching files" copy="Change the file name or type filter." />{/if}
+{:else if tab === "history"}
+  {#key course.id}<ArchiveHistory courseId={course.id} />{/key}
 {:else if tab === "health"}
   {#if !manifest}
     <EmptyState icon="shield-question" title="No manifest" copy="Fetch this course to generate coverage and integrity records." />

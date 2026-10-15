@@ -234,6 +234,23 @@ includes it. History has no automatic retention cleanup. Inventory reconciliatio
 retains previously indexed, matching local manifests when membership disappears,
 marking them archive-only and excluding them from new fetch selection.
 
+The course-history query goes through the archive service and repository to
+`archive-history-reader.js`. The reader bounds directory enumeration and JSON
+reads, rejects symlinks and unsafe paths, validates journal records, and reports
+truncation or unreadable entries without exposing raw filesystem errors. The
+history browser uses dedicated list/detail endpoints; previews use the existing
+contained file endpoint, which rechecks history paths. Presence and size checks
+do not claim SHA-256 verification. There is no restore mutation endpoint.
+
+Client requests enforce deadlines through response-body consumption and honor
+caller cancellation. Course, search, bootstrap, and detail loads reject stale
+results; failed file queries wait for explicit retry or invalidation. The event
+stream exposes local connection state and refreshes the bootstrap snapshot on
+reconnection while preserving events received during that refresh. Mutation
+requests are not retried automatically because a timed-out worker may still run.
+Browser regression checks and documentation capture share synthetic API fixtures
+and a static-only server, keeping them independent of private runtime data.
+
 The saved Playwright storage state is a credential and remains outside the
 archive. It must never be committed or exposed through dashboard APIs.
 

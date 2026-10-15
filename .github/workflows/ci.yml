@@ -39,3 +39,11 @@ jobs:
 
       - name: Verify project
         run: npm run ci
+
+      - name: Install Chromium for dashboard checks
+        if: matrix.node == '24'
+        run: npx playwright install --with-deps chromium
+
+      - name: Verify dashboard interactions and responsive layouts
+        if: matrix.node == '24'
+        run: npm run test:browser

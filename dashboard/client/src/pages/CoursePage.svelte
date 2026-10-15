@@ -18,6 +18,7 @@
     ["communication", "Communication"],
     ["people", "People"],
     ["files", "Files"],
+    ["history", "Backup history"],
     ["health", "Archive health"],
   ];
   let loadingId = "";
@@ -33,10 +34,12 @@
     try {
       await ensureCourse(id);
     } catch (error) {
-      reportError(error);
-      navigate("courses");
+      if ($appState.route.id === id) {
+        reportError(error);
+        navigate("courses");
+      }
     } finally {
-      loadingId = "";
+      if (loadingId === id) loadingId = "";
     }
   }
 

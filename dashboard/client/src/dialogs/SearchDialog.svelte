@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from "svelte";
+  import { onDestroy, tick } from "svelte";
   import EmptyState from "../components/EmptyState.svelte";
   import Icon from "../components/Icon.svelte";
   import Modal from "../components/Modal.svelte";
@@ -10,12 +10,14 @@
   let input: HTMLInputElement;
   let wasOpen = false;
   $: if ($appState.searchOpen && !wasOpen) { wasOpen = true; tick().then(() => input?.focus()); }
-  $: if (!$appState.searchOpen) wasOpen = false;
+  $: if (!$appState.searchOpen) { wasOpen = false; window.clearTimeout(timer); }
 
   function query(value: string) {
     changeState((state) => state.searchQuery = value);
     window.clearTimeout(timer);
-    timer = window.setTimeout(() => searchArchive(value).catch(reportError), 280);
+    timer = window.setTimeout(() => {
+      if ($appState.searchOpen && $appState.searchQuery === value) searchArchive(value).catch(reportError);
+    }, 280);
   }
 
   function choose(result: any) {
@@ -23,6 +25,8 @@
     if (result.type === "course") navigate(`course/${encodeURIComponent(result.courseId)}/overview`);
     else openFile(result.courseId, result.path).catch(reportError);
   }
+
+  onDestroy(() => window.clearTimeout(timer));
 </script>
 
 <Modal open={$appState.searchOpen} className="command-dialog" labelledby="search-title" close={() => changeState((state) => state.searchOpen = false)}>

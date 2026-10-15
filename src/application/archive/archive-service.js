@@ -168,6 +168,14 @@ class ArchiveService {
     return this.archiveRepository.resolveCourseFile(course, relativePath);
   }
 
+  getHistory(courseId) {
+    return this.archiveRepository.listCourseHistory(this.getCourseRecord(courseId));
+  }
+
+  getHistoryRun(courseId, runId) {
+    return this.archiveRepository.readCourseHistoryRun(this.getCourseRecord(courseId), runId);
+  }
+
   readFileText(courseId, relativePath, fallback = "") {
     const course = this.getCourseRecord(courseId);
     return this.archiveRepository.readCourseText(course, relativePath, fallback);

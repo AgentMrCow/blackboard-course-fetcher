@@ -32,7 +32,8 @@
     "check": "npm run check:js && npm run check:client",
     "check:js": "node scripts/check-js.js",
     "check:client": "svelte-check --config dashboard/client/svelte.config.js --tsconfig dashboard/client/tsconfig.json",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "test:browser": "node test/dashboard-browser-smoke.mjs"
   },
   "dependencies": {
     "cheerio": "1.1.2",

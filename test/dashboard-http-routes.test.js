@@ -181,6 +181,23 @@ test("fetch controller maps job creation and batch or task controls", async () =
   assert.deepEqual(calls[2], ["task", "batch-1", "task-2", "cancel"]);
 });
 
+test("archive history routes expose read-only lists and individual journals", async () => {
+  const calls = [];
+  const controller = new ArchiveHttpController({ workspace: {
+    courseHistory: (courseId) => { calls.push(["list", courseId]); return { runs: [] }; },
+    courseHistoryRun: (courseId, runId) => { calls.push(["run", courseId, runId]); return { id: runId, files: [] }; },
+  } });
+  const list = context("GET", "/api/courses/_1_1/history");
+  assert.equal(await controller.handle(list), true);
+  assert.deepEqual(list.response.json(), { runs: [] });
+  const detail = context("GET", "/api/courses/_1_1/history/example-run");
+  assert.equal(await controller.handle(detail), true);
+  assert.deepEqual(detail.response.json(), { id: "example-run", files: [] });
+  assert.deepEqual(calls, [["list", "_1_1"], ["run", "_1_1", "example-run"]]);
+  assert.equal(await controller.handle(context("POST", "/api/courses/_1_1/history/example-run")), false);
+  assert.equal(await controller.handle(context("GET", "/api/courses/_1_1/history/a%2Fb")), false);
+});
+
 test("static controller serves built assets and the SPA fallback without path escape", async () => {
   const served = [];
   const paths = {

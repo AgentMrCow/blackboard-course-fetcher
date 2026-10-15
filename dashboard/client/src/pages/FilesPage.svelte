@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import EmptyState from "../components/EmptyState.svelte";
   import FileCollection from "../components/FileCollection.svelte";
   import Icon from "../components/Icon.svelte";
@@ -9,7 +10,7 @@
   $: result = $appState.allFiles;
   $: filters = $appState.fileFilters;
   $: archivedCourses = $appState.bootstrap!.inventory.courses.filter((course) => course.archive.exists);
-  $: if (!$appState.allFiles && !$appState.filesLoading) loadAllFiles().catch(reportError);
+  $: if (!$appState.allFiles && !$appState.filesLoading && !$appState.filesError) loadAllFiles().catch(reportError);
   $: pageCount = result ? Math.ceil(result.total / result.limit) : 0;
   $: currentPage = result ? Math.min(pageCount - 1, Math.floor(result.offset / result.limit)) : 0;
 
@@ -22,6 +23,7 @@
     changeState((state) => {
       state.filePage = Math.max(0, page);
       state.allFiles = null;
+      state.filesError = "";
     });
   }
 
@@ -29,8 +31,11 @@
     changeState((state) => {
       state.filePage = 0;
       state.allFiles = null;
+      state.filesError = "";
     });
   }
+
+  onDestroy(() => window.clearTimeout(queryTimer));
 </script>
 
 <div class="page">
@@ -51,7 +56,9 @@
     <div class="segmented-control"><button class:active={$appState.fileView === "table"} onclick={() => changeState((state) => state.fileView = "table")} title="List view" aria-label="List view"><Icon name="list" /></button><button class:active={$appState.fileView === "grid"} onclick={() => changeState((state) => state.fileView = "grid")} title="Grid view" aria-label="Grid view"><Icon name="grid-2x2" /></button></div>
     <span class="selection-count">{result?.indexing ? `${result.status?.fileCount || 0} indexed` : result ? `${result.total} files` : "Loading"}</span>
   </div>
-  {#if $appState.filesLoading || !result}
+  {#if $appState.filesError}
+    <EmptyState icon="server-off" title="Files could not be loaded" copy={$appState.filesError}><button class="button secondary" onclick={() => loadAllFiles(true).catch(reportError)}><Icon name="refresh-cw" /><span>Try again</span></button></EmptyState>
+  {:else if $appState.filesLoading || !result}
     <div class="page-loading"><span class="spinner"></span><span>Reading local file indexes</span></div>
   {:else if result.indexing}
     <div class="page-loading"><span class="spinner"></span><span>Indexing course {result.status?.scannedCourses || 0} of {result.status?.totalCourses || "..."} in the background</span></div>

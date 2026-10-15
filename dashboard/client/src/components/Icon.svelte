@@ -41,6 +41,7 @@
   import FolderOpen from "@lucide/svelte/icons/folder-open";
   import Grid2x2 from "@lucide/svelte/icons/grid-2x2";
   import HardDriveDownload from "@lucide/svelte/icons/hard-drive-download";
+  import History from "@lucide/svelte/icons/history";
   import Info from "@lucide/svelte/icons/info";
   import LayoutDashboard from "@lucide/svelte/icons/layout-dashboard";
   import List from "@lucide/svelte/icons/list";
@@ -119,6 +120,7 @@
     "folder-open": FolderOpen,
     "grid-2x2": Grid2x2,
     "hard-drive-download": HardDriveDownload,
+    history: History,
     info: Info,
     "layout-dashboard": LayoutDashboard,
     list: List,

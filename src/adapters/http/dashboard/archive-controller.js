@@ -44,6 +44,16 @@ class ArchiveHttpController {
       sendJson(response, 200, this.workspace.courseDetails(match[1]));
       return true;
     }
+    match = pathname.match(/^\/api\/courses\/([^/]+)\/history$/);
+    if (match && method === "GET") {
+      sendJson(response, 200, this.workspace.courseHistory(match[1]));
+      return true;
+    }
+    match = pathname.match(/^\/api\/courses\/([^/]+)\/history\/([^/]+)$/);
+    if (match && method === "GET") {
+      sendJson(response, 200, this.workspace.courseHistoryRun(match[1], match[2]));
+      return true;
+    }
     match = pathname.match(/^\/api\/courses\/([^/]+)\/file$/);
     if (match && ["GET", "HEAD"].includes(method)) {
       const resolved = this.workspace.resolveArchiveFile(match[1], url.searchParams.get("path"));

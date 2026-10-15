@@ -22,10 +22,14 @@ Run the same verification used by GitHub Actions:
 
 ```bash
 npm run ci
+npm run test:browser
 ```
 
-This command runs JavaScript and Svelte checks, all unit tests, and the production
-dashboard build. Tests must not contact a live Blackboard installation.
+The first command runs JavaScript and Svelte checks, all unit tests, and the
+production dashboard build. The second uses Playwright Chromium to check
+dashboard interactions and desktop, tablet, and mobile layouts. It serves only
+built assets and synthetic API fixtures; no dashboard process or saved account
+is needed. Tests must not contact a live Blackboard installation.
 
 ## Fixtures and Privacy
 
@@ -61,13 +65,17 @@ npm run check:client
 npm run dashboard:build
 ```
 
-To refresh the README walkthrough while the dashboard is running:
+To refresh the README walkthrough after building the dashboard:
 
 ```bash
 npm run docs:capture
 ```
 
-The capture uses deterministic API fixtures and does not start a real fetch.
+The capture starts its own static server and uses the shared synthetic API
+fixtures in `test/fixtures/dashboard.mjs`. It does not start a real fetch.
+The backup-history screenshot comes from `npm run test:browser`; copy its
+`history-desktop.png` artifact to `docs/assets/tutorial/09-backup-history.png`
+after reviewing it. Inspect documentation images before committing them.
 `ffmpeg` is optional and is needed only to regenerate the animated GIF.
 
 ## Pull Requests

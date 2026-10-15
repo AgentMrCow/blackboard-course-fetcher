@@ -101,6 +101,10 @@ memberships and term metadata without fetching course bodies. Open **Courses**,
 review the term, Ultra or Classic view, availability, and existing archive state,
 then select one or more courses.
 
+Use **In Blackboard**, **Local only**, or **Needs attention** to narrow the catalog.
+**Select visible** selects eligible courses in the current view; local-only
+archives remain readable but cannot start a new fetch.
+
 ![Course catalog with one course selected](docs/assets/tutorial/04-select-course.png)
 
 #### 5. Review the Full Archive Fetch
@@ -142,6 +146,16 @@ additional local representations maintained by the fetcher.
 
 ![Files view with course, type, and provenance filters](docs/assets/tutorial/08-files.png)
 
+#### 9. Inspect Previous File Versions
+
+Open a course's **Backup history** tab to browse files preserved before a refresh
+replaced them. Select a run, filter by original path, and preview or download a
+saved file. Missing, changed, and unsafe entries have explicit status labels.
+Viewing a backup does not replace the current archive; the recovery guidance
+explains how to copy selected files back manually.
+
+![Backup history showing saved refreshes, original paths, and file actions](docs/assets/tutorial/09-backup-history.png)
+
 The dashboard client is built with Svelte, Vite, and TypeScript. A production
 build is included under `dashboard/public`, so ordinary users can run the local
 server directly. When changing the dashboard source under `dashboard/client`, use:
@@ -151,15 +165,17 @@ npm run dashboard:build
 npm run check:client
 ```
 
-To regenerate the README screenshots and GIF against the current dashboard build,
-keep `npm run dashboard` running and execute:
+To regenerate the README walkthrough against the current dashboard build, run:
 
 ```bash
 npm run docs:capture
 ```
 
-The capture script keeps its deterministic API fixture in `test/`, writes the
-versioned images to `docs/assets/tutorial/`, and never starts a real course fetch.
+The capture starts a temporary server for built assets, intercepts every API
+request with synthetic fixtures in `test/fixtures/dashboard.mjs`, and writes the
+walkthrough images to `docs/assets/tutorial/`. It needs no running dashboard or
+Blackboard account and never starts a real course fetch. The backup-history image
+comes from the browser checks described under Development.
 PNG generation only needs Playwright Chromium. GIF generation also requires
 `ffmpeg`; when it is unavailable, the script leaves the existing GIF untouched.
 
@@ -195,6 +211,12 @@ Office and archive files remain available through the browser's open/download
 action. A background index keeps file paths and the contents of archived text,
 JSON, and URL files searchable without delaying the initial page load. Archived
 HTML previews are sandboxed and cannot load external network resources.
+
+The dashboard reports local-server disconnections separately from Blackboard
+session status and refreshes its state when the event connection returns.
+Requests have deadlines, outdated search and detail responses are ignored, and
+failed file-list loads offer an explicit retry. A timed-out fetch request can
+still be running on the server, so check Fetch activity before starting another.
 
 The dashboard displays free space on the archive drive and repeats it before a
 full fetch. Full mode can consume substantial storage, so clear space before a
@@ -355,8 +377,13 @@ exports, and external snapshots. Backups live under
 `<course>/.fetch-history/<run-id>/files/`; `index.json` records original paths,
 sizes, and SHA-256 hashes. Writes use temporary files and atomic replacement. A
 backup failure prevents that file's replacement. The manifest and summary link
-to the run's history when one exists. Backups are excluded from browsing/search
-and are never automatically pruned, so they use additional disk space.
+to the run's history when one exists. Backups are available in the course's
+**Backup history** tab and excluded from ordinary file listings and search.
+They are never automatically pruned, so they use additional disk space.
+
+History browsing checks file presence, containment, and recorded size; it does
+not rehash every backup. Bounded reads keep large histories responsive, and the
+dashboard reports when only part of an index or history is displayed.
 
 This is a file replacement history, not a whole-course transaction: a failed run
 can leave a mixture of old and new exports. To recover, stop fetching that course,
@@ -589,11 +616,25 @@ Run syntax checks:
 npm run check
 ```
 
-Run the complete local CI sequence:
+Run syntax checks, unit tests, and the production build:
 
 ```bash
 npm run ci
 ```
+
+Then run the dashboard interaction and responsive-layout checks:
+
+```bash
+npx playwright install chromium
+npm run test:browser
+```
+
+These checks serve built assets with synthetic API responses and require no
+Blackboard session, course archive, or running dashboard. They cover backup
+previews, explicit retries, reconnects, selection rules, keyboard navigation,
+and desktop, tablet, and mobile layouts. Screenshots are saved under the ignored
+`test/artifacts/dashboard-smoke/` directory. GitHub Actions also runs these checks
+on Node.js 24.
 
 ## Contributing and Security
 

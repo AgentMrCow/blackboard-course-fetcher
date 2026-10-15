@@ -1,6 +1,7 @@
 <script lang="ts">
   import CourseAvatar from "../../components/CourseAvatar.svelte";
   import EmptyState from "../../components/EmptyState.svelte";
+  import FileVisual from "../../components/FileVisual.svelte";
   import StatusBadge from "../../components/StatusBadge.svelte";
   import { openAnnouncement, openAssignment, openFile, reportError } from "../../lib/controller";
   import { assessmentStatus, courseGradeSummary, formatBytes, formatDate, initials, relativeTime } from "../../lib/format";
@@ -46,6 +47,6 @@
     {#if group}
       <section class="section-block"><div class="section-heading"><h2>Your group</h2><a href={`#/course/${encodeURIComponent(course.id)}/people`}>People</a></div><div class="member-list"><div class="member-row"><span class="member-avatar">{initials(group.title)}</span><span><strong>{group.title}</strong><small>{group.members?.length || group.studentCount || 0} accessible members</small></span><StatusBadge status={group.hasSubmittedGroupAttempt ? "submitted" : "neutral"} label={group.hasSubmittedGroupAttempt ? "Submitted" : "Active"} /></div>{#each (group.members || []).slice(0, 4) as member}<div class="member-row"><span class="member-avatar">{initials(member.displayName)}</span><span><strong>{member.displayName}</strong><small>{member.courseRole || "Member"}</small></span></div>{/each}</div></section>
     {/if}
-    <section class="section-block"><div class="section-heading"><h2>Recent files</h2><a href={`#/course/${encodeURIComponent(course.id)}/files`}>Browse files</a></div><div class="data-surface"><ul class="recent-file-list">{#each recentFiles as file}<li class="recent-file-item"><button onclick={() => openFile(course.id, file.path).catch(reportError)}><strong>{file.name}</strong><small>{file.category} · {formatBytes(file.size)}</small></button></li>{:else}<li><EmptyState icon="files" title="No files" copy="No local files are present for this course." /></li>{/each}</ul></div></section>
+    <section class="section-block"><div class="section-heading"><h2>Recent files</h2><a href={`#/course/${encodeURIComponent(course.id)}/files`}>Browse files</a></div><div class="data-surface"><ul class="recent-file-list">{#each recentFiles as file}<li class="recent-file-item"><button onclick={() => openFile(course.id, file.path).catch(reportError)}><FileVisual {file} courseId={course.id} mini /><span><strong>{file.name}</strong><small>{file.category} · {formatBytes(file.size)}</small></span></button></li>{:else}<li><EmptyState icon="files" title="No files" copy="No local files are present for this course." /></li>{/each}</ul></div></section>
   </div>
 </div>

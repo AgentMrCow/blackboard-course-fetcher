@@ -9,6 +9,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Course backup-history browser with saved-run selection, path filtering,
+  previews, downloads, and explicit missing or changed file states.
+- Responsive overview with archive readiness, deadlines, and recent material;
+  course membership scopes, attention filtering, and visible-course selection.
+- Offline Playwright checks for dashboard workflows and responsive layouts,
+  shared with the documentation's synthetic fixtures.
 - Per-refresh replacement history for previous manifests, metadata exports, and
   external snapshots, with original paths and SHA-256 hashes for recovery.
 - Explicit per-file transfer dispositions and current-attempt download counters.
@@ -16,6 +22,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Bound API request duration, reject unexpected response formats, and prevent
+  stale searches or detail requests from replacing newer user choices.
+- Catch up dashboard state after event-stream reconnection, distinguish local
+  connection problems from sign-in status, and stop failed file-list retry loops.
+- Preserve routes when using the keyboard skip link and clean up connections
+  when initialization completes after the dashboard has been unmounted.
+- Keep quickly reopened dialogs visible when older close events arrive.
 - Stop on explicit membership denial before modifying course exports or migrating
   legacy archive directories; retain locally archived courses during inventory refresh.
 - Preserve old bytes before replacing generated files and write replacements atomically.

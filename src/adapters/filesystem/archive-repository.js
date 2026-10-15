@@ -10,6 +10,7 @@ const {
   previewKind,
 } = require("../../domain/archive/archive-metadata");
 const { readJson } = require("./json-file-store");
+const { listArchiveHistory, readArchiveHistoryRun, resolveHistoryFile } = require("./archive-history-reader");
 
 function readText(file, fallback = "") {
   try {
@@ -145,7 +146,23 @@ class FileSystemArchiveRepository {
   }
 
   resolveCourseFiles(course, relativePaths) {
-    return resolveFilesAtLocation(course, this.courseLocation(course), relativePaths);
+    const location = this.courseLocation(course);
+    for (const relativePath of relativePaths) {
+      const normalized = normalizeArchivePath(relativePath).replace(/^\/+/, "");
+      const canonical = normalizeArchivePath(path.relative(location.root, path.resolve(location.root, normalized)));
+      if (canonical.split("/")[0].toLowerCase() === ".fetch-history") {
+        resolveHistoryFile(location.root, canonical);
+      }
+    }
+    return resolveFilesAtLocation(course, location, relativePaths);
+  }
+
+  listCourseHistory(course) {
+    return listArchiveHistory(this.courseLocation(course));
+  }
+
+  readCourseHistoryRun(course, runId) {
+    return readArchiveHistoryRun(this.courseLocation(course), runId);
   }
 
   scanCourseFiles(course, { includeSearchDocuments = false } = {}) {
