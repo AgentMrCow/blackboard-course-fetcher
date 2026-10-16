@@ -28,6 +28,7 @@ const initialState: AppState = {
   setupOpen: false,
   setupStep: 0,
   fetchOpen: false,
+  fetchSubmitting: false,
   fetchCourseIds: [],
   searchOpen: false,
   searchQuery: "",

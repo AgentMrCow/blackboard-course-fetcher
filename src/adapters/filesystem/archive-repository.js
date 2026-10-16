@@ -10,7 +10,7 @@ const {
   previewKind,
 } = require("../../domain/archive/archive-metadata");
 const { readJson } = require("./json-file-store");
-const { listArchiveHistory, readArchiveHistoryRun, resolveHistoryFile } = require("./archive-history-reader");
+const { listArchiveHistory, readArchiveHistoryRun, compareArchiveHistoryFile, resolveHistoryFile } = require("./archive-history-reader");
 
 function readText(file, fallback = "") {
   try {
@@ -157,12 +157,35 @@ class FileSystemArchiveRepository {
     return resolveFilesAtLocation(course, location, relativePaths);
   }
 
-  listCourseHistory(course) {
-    return listArchiveHistory(this.courseLocation(course));
+  async historyLocation(course) {
+    const outputDirectory = normalizeArchivePath(course.outputDirectory);
+    const root = path.resolve(this.archiveRoot, outputDirectory);
+    if (!outputDirectory || root === this.archiveRoot || !isInside(this.archiveRoot, root)) {
+      throw httpError(400, "Unsafe or missing course archive path");
+    }
+    try {
+      const [realArchive, realRoot] = await Promise.all([
+        fs.promises.realpath(this.archiveRoot), fs.promises.realpath(root),
+      ]);
+      if (!isInside(realArchive, realRoot)) throw httpError(400, "Unsafe course archive path");
+      return { root: realRoot };
+    } catch (error) {
+      if (error.code === "ENOENT") return { root };
+      if (error.statusCode) throw error;
+      throw httpError(400, "Course archive path could not be read");
+    }
   }
 
-  readCourseHistoryRun(course, runId) {
-    return readArchiveHistoryRun(this.courseLocation(course), runId);
+  async listCourseHistory(course) {
+    return listArchiveHistory(await this.historyLocation(course));
+  }
+
+  async readCourseHistoryRun(course, runId, options) {
+    return readArchiveHistoryRun(await this.historyLocation(course), runId, options);
+  }
+
+  async compareCourseHistoryFile(course, runId, relativePath) {
+    return compareArchiveHistoryFile(await this.historyLocation(course), runId, relativePath);
   }
 
   scanCourseFiles(course, { includeSearchDocuments = false } = {}) {

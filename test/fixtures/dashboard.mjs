@@ -347,6 +347,23 @@ const courseDetail = {
   },
 };
 
+export function backupHistory() {
+  const runs = [
+    { id: "2026-10-16T08-00-00-000Z-demo", createdAt: new Date(Date.now() - 3 * 3_600_000).toISOString(), fileCount: 3, totalBytes: 420, status: "available", warnings: [] },
+    { id: "2026-10-15T08-00-00-000Z-demo", createdAt: new Date(Date.now() - 27 * 3_600_000).toISOString(), fileCount: 1, totalBytes: 100, status: "available", warnings: [] },
+  ];
+  const files = ["gradebook.json", "02_Announcements/notice/announcement.txt", "manifest.json"].map((file, index) => ({
+    path: file, backupPath: index === 2 ? null : `.fetch-history/${runs[0].id}/files/${file}`, size: 140,
+    sha256: "0".repeat(64), preservedAt: runs[0].createdAt, status: index === 2 ? "missing" : "available",
+  }));
+  const version = { status: "available", size: 140, modifiedAt: runs[0].createdAt, sha256: "0".repeat(64), textTruncated: false };
+  return {
+    list: { runs, recordedBytes: 520, recordedFiles: 4, truncated: false, warnings: [] },
+    detail: { ...runs[0], files, offset: 0, limit: 100, total: files.length, hasMore: false, truncated: false },
+    comparison: { path: files[0].path, backupPath: files[0].backupPath, recorded: { size: 140, sha256: version.sha256, preservedAt: runs[0].createdAt }, saved: { ...version, text: '{"score":80,"feedback":"Original feedback"}' }, current: { ...version, sha256: "1".repeat(64), text: '{"score":90,"feedback":"Updated feedback"}' }, comparison: "different", warnings: [] },
+  };
+}
+
 const bootstrap = {
   app: { name: "Blackboard Archive", version: "0.2.0" },
   settings: {

@@ -11,7 +11,7 @@
 
   $: ({ course, assessments, announcements, files, groups } = detail);
   $: grade = courseGradeSummary(detail);
-  $: upcoming = assessments.filter((assessment) => assessment.dueDate && new Date(assessment.dueDate).valueOf() >= Date.now() - 86_400_000).sort((left, right) => new Date(left.dueDate).valueOf() - new Date(right.dueDate).valueOf()).slice(0, 6);
+  $: upcoming = assessments.filter((assessment) => assessment.dueDate && new Date(assessment.dueDate).valueOf() >= Date.now()).sort((left, right) => new Date(left.dueDate).valueOf() - new Date(right.dueDate).valueOf()).slice(0, 6);
   $: recentFiles = files.filter((file) => file.hiddenByDefault !== true).sort((left, right) => String(right.modifiedAt).localeCompare(String(left.modifiedAt))).slice(0, 6);
   $: group = groups?.accessibleGroups?.[0];
 </script>

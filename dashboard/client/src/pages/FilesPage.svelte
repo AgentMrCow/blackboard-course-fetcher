@@ -3,12 +3,13 @@
   import EmptyState from "../components/EmptyState.svelte";
   import FileCollection from "../components/FileCollection.svelte";
   import Icon from "../components/Icon.svelte";
-  import { appState, changeState, loadAllFiles, openFile, reportError, setFileFilters } from "../lib/controller";
+  import { appState, changeState, loadAllFiles, openFile, refreshFileIndex, reportError, retryFiles, setFileFilters } from "../lib/controller";
   import type { FileScope } from "../lib/types";
 
   let queryTimer: number;
   $: result = $appState.allFiles;
   $: filters = $appState.fileFilters;
+  $: indexFailed = $appState.bootstrap?.fileIndex?.status === "failed";
   $: archivedCourses = $appState.bootstrap!.inventory.courses.filter((course) => course.archive.exists);
   $: if (!$appState.allFiles && !$appState.filesLoading && !$appState.filesError) loadAllFiles().catch(reportError);
   $: pageCount = result ? Math.ceil(result.total / result.limit) : 0;
@@ -27,21 +28,13 @@
     });
   }
 
-  function refresh() {
-    changeState((state) => {
-      state.filePage = 0;
-      state.allFiles = null;
-      state.filesError = "";
-    });
-  }
-
   onDestroy(() => window.clearTimeout(queryTimer));
 </script>
 
 <div class="page">
   <header class="page-header">
     <div><span class="eyebrow">Course materials and archive records</span><h1>Files</h1><p>Preview, search, and download course files without navigating Blackboard folders.</p></div>
-    <div class="page-actions"><button class="button secondary" onclick={refresh}><Icon name="refresh-cw" /><span>Refresh index</span></button></div>
+    <div class="page-actions"><button class="button secondary" disabled={$appState.filesLoading || $appState.bootstrap?.fileIndex?.status === "running"} onclick={() => refreshFileIndex().catch(reportError)}><Icon name="refresh-cw" /><span>Refresh index</span></button></div>
   </header>
   <div class="file-toolbar">
     <div class="filter-input"><Icon name="search" /><input type="search" placeholder="Filter file names and paths" value={filters.query} oninput={(event) => updateQuery(event.currentTarget.value)} /></div>
@@ -54,10 +47,10 @@
     <select class="select" value={filters.courseId} onchange={(event) => setFileFilters({ courseId: event.currentTarget.value })}><option value="">All courses</option>{#each archivedCourses as course}<option value={course.id}>{course.code} · {course.name}</option>{/each}</select>
     <select class="select" value={filters.preview} onchange={(event) => setFileFilters({ preview: event.currentTarget.value })}><option value="all">All file types</option>{#each ["pdf", "office", "image", "video", "audio", "html", "text", "json", "placeholder", "archive"] as value}<option {value}>{value[0].toUpperCase() + value.slice(1)}</option>{/each}</select>
     <div class="segmented-control"><button class:active={$appState.fileView === "table"} onclick={() => changeState((state) => state.fileView = "table")} title="List view" aria-label="List view"><Icon name="list" /></button><button class:active={$appState.fileView === "grid"} onclick={() => changeState((state) => state.fileView = "grid")} title="Grid view" aria-label="Grid view"><Icon name="grid-2x2" /></button></div>
-    <span class="selection-count">{result?.indexing ? `${result.status?.fileCount || 0} indexed` : result ? `${result.total} files` : "Loading"}</span>
+    <span class="selection-count">{$appState.filesError ? "Unavailable" : result?.indexing ? `${result.status?.fileCount || 0} indexed` : result ? `${result.total} files` : "Loading"}</span>
   </div>
   {#if $appState.filesError}
-    <EmptyState icon="server-off" title="Files could not be loaded" copy={$appState.filesError}><button class="button secondary" onclick={() => loadAllFiles(true).catch(reportError)}><Icon name="refresh-cw" /><span>Try again</span></button></EmptyState>
+    <EmptyState icon="server-off" title={indexFailed ? "File indexing failed" : "Files could not be loaded"} copy={$appState.filesError}><button class="button secondary" onclick={() => retryFiles().catch(reportError)}><Icon name="refresh-cw" /><span>{indexFailed ? "Rebuild index" : "Try again"}</span></button></EmptyState>
   {:else if $appState.filesLoading || !result}
     <div class="page-loading"><span class="spinner"></span><span>Reading local file indexes</span></div>
   {:else if result.indexing}

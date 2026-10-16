@@ -42,6 +42,7 @@ function harness() {
     selectedCourses: new Set(["c"]),
     route: { page: "home" },
     fetchOpen: true,
+    fetchSubmitting: false,
   };
   const files = ["a.txt", "b.txt", "b.pdf"].map((filePath) => ({
     path: filePath,
@@ -338,6 +339,63 @@ test("a fetch POST response does not duplicate or replace an earlier SSE batch",
   assert.equal(state.fetchOpen, false);
 });
 
+for (const scenario of ["closed", "reopened", "navigated"]) {
+  test(`a delayed fetch response preserves later selections and navigation after the dialog is ${scenario}`, async () => {
+    const { controller, state, requests, navigations } = harness();
+    state.bootstrap.auth = { status: "connected" };
+    state.bootstrap.inventory = { courses: [{ id: "c" }, { id: "next" }] };
+    const starting = controller.startFetch({ downloadMode: "full" });
+    assert.equal(state.fetchSubmitting, true);
+    if (scenario === "navigated") state.route = { page: "files" };
+    else controller.closeFetch();
+    state.selectedCourses = new Set(["next"]);
+    if (scenario === "reopened") controller.openFetch(["next"]);
+    requests[0].resolve({ id: "started", status: "queued" });
+    await starting;
+    assert.deepEqual([...state.selectedCourses], ["next"]);
+    assert.equal(state.fetchOpen, scenario !== "closed");
+    assert.equal(state.bootstrap.jobs[0].id, "started");
+    assert.deepEqual(navigations, []);
+    assert.equal(state.fetchSubmitting, false);
+  });
+}
+
+test("reopening the same fetch dialog cannot submit an overlapping POST or be closed by its old response", async () => {
+  const { controller, state, requests, navigations } = harness();
+  state.bootstrap.auth = { status: "connected" };
+  state.bootstrap.inventory = { courses: [{ id: "c" }] };
+  const starting = controller.startFetch({ downloadMode: "full" });
+  controller.closeFetch();
+  controller.openFetch(["c"]);
+  assert.equal(state.fetchSubmitting, true);
+  await assert.rejects(controller.startFetch({ downloadMode: "full" }), /already being submitted/);
+  assert.equal(requests.length, 1);
+  requests[0].resolve({ id: "started", status: "queued" });
+  await starting;
+  assert.equal(state.fetchOpen, true);
+  assert.deepEqual([...state.selectedCourses], ["c"]);
+  assert.deepEqual(navigations, []);
+});
+
+test("fetch completion preserves a selection changed while the same dialog is open", async () => {
+  const { controller, state, requests } = harness();
+  const starting = controller.startFetch({ downloadMode: "full" });
+  state.selectedCourses.add("later");
+  requests[0].resolve({ id: "started", status: "queued" });
+  await starting;
+  assert.deepEqual([...state.selectedCourses], ["c", "later"]);
+});
+
+test("a failed fetch submission releases the shared pending lock", async () => {
+  const { controller, state, requests } = harness();
+  const starting = controller.startFetch({ downloadMode: "full" });
+  requests[0].reject(new Error("Fetch could not start"));
+  await assert.rejects(starting, /could not start/);
+  assert.equal(state.fetchSubmitting, false);
+  assert.equal(state.fetchOpen, true);
+  assert.deepEqual([...state.selectedCourses], ["c"]);
+});
+
 test("concurrent course reads share one request", async () => {
   const { controller, state, requests } = harness();
   state.courseCache.clear();
@@ -551,6 +609,138 @@ test("file errors reset on filter change or an explicit retry", async () => {
   requests[0].resolve(filePage("recovered-file"));
   await retry;
   assert.equal(state.allFiles.files[0].name, "recovered-file");
+});
+
+test("a failed file-index event stops indexing and ignores an older file response", async () => {
+  const { controller, state, requests, source, dispose } = await connectedHarness();
+  state.allFiles = { ...filePage("cached"), indexing: true };
+  const loading = controller.loadAllFiles(true);
+  source.emit("file-index", { status: "failed", message: "Disk is full while writing the index" });
+  await settleMicrotasks();
+  assert.equal(state.allFiles.indexing, false);
+  assert.equal(state.filesLoading, false);
+  assert.equal(state.filesError, "Disk is full while writing the index");
+  requests[1].resolve({ ...filePage("old"), indexing: true });
+  await loading;
+  assert.equal(state.allFiles.files[0].name, "cached");
+  assert.equal(state.allFiles.indexing, false);
+  assert.equal(state.filesError, "Disk is full while writing the index");
+  controller.setFileFilters({ query: "new" });
+  await controller.loadAllFiles();
+  assert.equal(requests.length, 2);
+  assert.equal(state.filesError, "Disk is full while writing the index");
+  dispose();
+});
+
+test("file-index failure in bootstrap is visible before a file-list request starts", async () => {
+  const { controller, state, requests } = harness();
+  const refreshing = controller.refreshBootstrap();
+  requests[0].resolve({ ...bootstrap(), fileIndex: { status: "failed", message: "Indexer exited unexpectedly" } });
+  await refreshing;
+  await controller.loadAllFiles();
+  assert.equal(state.filesError, "Indexer exited unexpectedly");
+  assert.equal(state.filesLoading, false);
+  assert.equal(requests.length, 1);
+});
+
+test("retrying a failed index explicitly rebuilds it before loading the file list", async () => {
+  const { controller, state, requests } = harness();
+  state.bootstrap.fileIndex = { status: "failed", message: "Index failed" };
+  state.filesError = "Index failed";
+  state.filePage = 3;
+  const retrying = controller.retryFiles();
+  assert.equal(requests[0].url, "/api/bootstrap?refresh=1");
+  assert.equal(state.filesLoading, true);
+  requests[0].resolve({ ...bootstrap(), fileIndex: { status: "running" } });
+  await settleMicrotasks();
+  assert.match(requests[1].url, /^\/api\/files\?/);
+  assert.equal(new URL(requests[1].url, "http://localhost").searchParams.get("offset"), "0");
+  requests[1].resolve({ ...filePage(""), files: [], indexing: true });
+  await retrying;
+  assert.equal(state.allFiles.indexing, true);
+  assert.equal(state.filesError, "");
+  assert.equal(state.filesLoading, false);
+});
+
+test("refresh index reports a failed rebuild request and releases the spinner", async () => {
+  const { controller, state, requests } = harness();
+  const refreshing = controller.refreshFileIndex();
+  requests[0].reject(new Error("Local server unavailable"));
+  await assert.rejects(refreshing, /server unavailable/);
+  assert.equal(state.filesLoading, false);
+  assert.equal(state.filesError, "Local server unavailable");
+});
+
+test("retrying a file-list network error does not rebuild an otherwise healthy index", async () => {
+  const { controller, requests } = harness();
+  const retrying = controller.retryFiles();
+  assert.match(requests[0].url, /^\/api\/files\?/);
+  requests[0].resolve(filePage("recovered"));
+  await retrying;
+});
+
+test("index progress stays current and completion clears a previous failure", async () => {
+  const { state, source, dispose } = await connectedHarness();
+  state.allFiles = { ...filePage(""), files: [], indexing: true, status: { status: "running", scannedCourses: 1 } };
+  source.emit("file-index", { status: "running", scannedCourses: 4, fileCount: 120 });
+  await settleMicrotasks();
+  assert.equal(state.allFiles.status.scannedCourses, 4);
+  assert.equal(state.allFiles.status.fileCount, 120);
+  source.emit("file-index", { status: "failed", message: "Read failed" });
+  await settleMicrotasks();
+  source.emit("file-index", { status: "complete" });
+  await settleMicrotasks();
+  assert.equal(state.allFiles, null);
+  assert.equal(state.filesError, "");
+  assert.equal(state.filesLoading, false);
+  dispose();
+});
+
+test("an old client authentication response cannot overwrite changed connection settings", async () => {
+  const { controller, state, requests } = harness();
+  state.bootstrap.settings = { blackboardBase: "https://old.example.edu", stateFile: "old.json" };
+  state.bootstrap.auth = { status: "idle", validation: null };
+  const checking = controller.checkAuth();
+  state.bootstrap.settings = { blackboardBase: "https://new.example.edu", stateFile: "new.json" };
+  requests[0].resolve({ status: "connected", validation: { valid: true } });
+  await checking;
+  assert.equal(state.bootstrap.auth.status, "idle");
+  assert.equal(state.bootstrap.auth.validation, null);
+});
+
+test("a newer client auth action keeps ownership over a slower check", async () => {
+  const { controller, state, requests } = harness();
+  const checking = controller.checkAuth();
+  const starting = controller.authAction("start");
+  requests[1].resolve({ status: "waiting", validation: null });
+  await starting;
+  requests[0].resolve({ status: "connected", validation: { valid: true } });
+  await checking;
+  assert.equal(state.bootstrap.auth.status, "waiting");
+  assert.equal(state.bootstrap.auth.validation, null);
+});
+
+test("a delayed auth check cannot undo a newer session invalidation event", async () => {
+  const { controller, state, requests, source, dispose } = await connectedHarness();
+  const checking = controller.checkAuth();
+  source.emit("auth", { status: "idle", validation: null, message: "Connection settings changed" });
+  await settleMicrotasks();
+  requests[1].resolve({ status: "connected", validation: { valid: true } });
+  await checking;
+  assert.equal(state.bootstrap.auth.status, "idle");
+  assert.equal(state.bootstrap.auth.validation, null);
+  dispose();
+});
+
+test("the sign-in browser ready event cannot be regressed by a delayed start response", async () => {
+  const { controller, state, requests, source, dispose } = await connectedHarness();
+  const starting = controller.authAction("start");
+  source.emit("auth", { status: "waiting", validation: null });
+  await settleMicrotasks();
+  requests[1].resolve({ status: "starting", validation: null });
+  await starting;
+  assert.equal(state.bootstrap.auth.status, "waiting");
+  dispose();
 });
 
 function dialogCourse(id) {

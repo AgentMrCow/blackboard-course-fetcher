@@ -39,7 +39,9 @@ clock, and scheduler contracts. `archive/archive-service.js` builds inventory,
 course, summary, file, and search views through an archive-repository contract;
 `archive/build-file-index.js` owns the file-index schema and build workflow.
 `authentication/authentication-coordinator.js` owns session-check and sign-in
-state transitions through session-gateway and runner contracts.
+state transitions through session-gateway and runner contracts. Changing the
+Blackboard origin or storage-state path invalidates the previous validation;
+validation generations prevent an older check from restoring that result.
 `inventory/inventory-coordinator.js` owns inventory start, output, cancellation,
 and completion policy through the same kind of injected ports.
 `inventory/course-inventory-service.js` performs membership discovery, archive
@@ -111,7 +113,11 @@ Infrastructure implementations grouped by capability:
 - `http`: a guarded dashboard router; focused workspace, archive, fetch-job, and
   static controllers; request parsing; JSON responses; archive file streaming;
   local request security; byte ranges; and an isolated server-sent-event client
-  hub that owns connection lifecycle and event framing.
+  hub that owns connection lifecycle and event framing. Archive responses apply
+  sandbox CSP to every document type, including direct SVG navigation. File
+  serving opens and checks a descriptor before sending headers, revalidates the
+  archive path, and uses an error-handled stream pipeline so read failures or
+  client disconnects terminate only their response and close the descriptor.
 - `cli`: fetch-all and single-course argument parsing, environment and path
   resolution, console progress observation, help, and result presentation.
 - `system`: authentication, inventory, file-index, dashboard fetch, and CLI course
@@ -235,12 +241,30 @@ retains previously indexed, matching local manifests when membership disappears,
 marking them archive-only and excluding them from new fetch selection.
 
 The course-history query goes through the archive service and repository to
-`archive-history-reader.js`. The reader bounds directory enumeration and JSON
-reads, rejects symlinks and unsafe paths, validates journal records, and reports
-truncation or unreadable entries without exposing raw filesystem errors. The
-history browser uses dedicated list/detail endpoints; previews use the existing
-contained file endpoint, which rechecks history paths. Presence and size checks
-do not claim SHA-256 verification. There is no restore mutation endpoint.
+`archive-history-reader.js`. History queries use asynchronous filesystem reads,
+reject symlinks and unsafe paths, validate journal records, and report truncation
+or unreadable entries without exposing raw filesystem errors. The list endpoint
+reads journal summaries without inspecting every preserved file. It inspects up
+to 1,000 directory entries, lists up to 100 of those run names, and bounds journals
+to 2 MiB each and 8 MiB across the list. Up to 2,000 records per journal contribute
+to displayed counts. Recorded file and byte totals come from those journals,
+include repeated versions, and do not represent a fresh disk-usage measurement.
+
+The run endpoint accepts `offset`, `limit`, and `q`, filters validated paths before
+paging, and checks at most 100 files per request. Filesystem inspection uses up
+to eight concurrent operations and caches ancestor checks only within a request.
+Presence and size checks do not claim SHA-256 verification. Previews use the
+existing contained file endpoint, which rechecks history paths.
+
+The per-file `history/:runId/compare?path=...` endpoint compares current and saved
+versions without writing to the archive. It reads each file at most once through
+a checked descriptor, rechecks ancestors and file identity, and hashes files up
+to 2 MiB each. A saved hash is checked against the journal; larger files receive
+size-only comparisons. Supported text must be valid UTF-8 without NUL bytes, and
+the response limits each text preview to 128 KiB. The client further limits
+differences to 600 lines and 100,000 characters per side, with a bounded matching
+matrix and a changed-block fallback for large edits. Recovery previews explain
+source, destination, and replacement effects; there is no restore mutation endpoint.
 
 Client requests enforce deadlines through response-body consumption and honor
 caller cancellation. Course, search, bootstrap, and detail loads reject stale
@@ -248,6 +272,19 @@ results; failed file queries wait for explicit retry or invalidation. The event
 stream exposes local connection state and refreshes the bootstrap snapshot on
 reconnection while preserving events received during that refresh. Mutation
 requests are not retried automatically because a timed-out worker may still run.
+Fetch submissions retain their originating dialog and selection identity: an
+accepted older request updates job history without closing a newer dialog,
+clearing a changed selection, or navigating away from a different page. Failed
+file-index events stop the loading state and offer an explicit index rebuild.
+Client authentication checks also validate their settings and event generation;
+Settings reuses the Setup dialog's complete sign-in workflow.
+
+Mobile navigation isolates the open drawer with inert background content and a
+focus trap, restores focus when closed, and removes the closed drawer from the
+tab order. Course section selection is a native select on smaller screens and
+current-page links on desktop. Calendar day expansion exposes all saved events;
+agenda pagination and explicit Upcoming/Overdue/All filters avoid hidden items
+and ambiguous date ranges.
 Browser regression checks and documentation capture share synthetic API fixtures
 and a static-only server, keeping them independent of private runtime data.
 

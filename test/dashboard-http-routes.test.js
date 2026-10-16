@@ -184,16 +184,22 @@ test("fetch controller maps job creation and batch or task controls", async () =
 test("archive history routes expose read-only lists and individual journals", async () => {
   const calls = [];
   const controller = new ArchiveHttpController({ workspace: {
-    courseHistory: (courseId) => { calls.push(["list", courseId]); return { runs: [] }; },
-    courseHistoryRun: (courseId, runId) => { calls.push(["run", courseId, runId]); return { id: runId, files: [] }; },
+    courseHistory: async (courseId) => { calls.push(["list", courseId]); return { runs: [] }; },
+    courseHistoryRun: async (courseId, runId, options) => { calls.push(["run", courseId, runId, options]); return { id: runId, files: [] }; },
+    compareCourseHistoryFile: async (...args) => { calls.push(["compare", ...args]); return { comparison: "identical" }; },
   } });
   const list = context("GET", "/api/courses/_1_1/history");
   assert.equal(await controller.handle(list), true);
   assert.deepEqual(list.response.json(), { runs: [] });
-  const detail = context("GET", "/api/courses/_1_1/history/example-run");
+  const detail = context("GET", "/api/courses/_1_1/history/example-run?offset=10&limit=20&q=notes");
   assert.equal(await controller.handle(detail), true);
   assert.deepEqual(detail.response.json(), { id: "example-run", files: [] });
-  assert.deepEqual(calls, [["list", "_1_1"], ["run", "_1_1", "example-run"]]);
+  assert.deepEqual(calls, [["list", "_1_1"], ["run", "_1_1", "example-run", { offset: "10", limit: "20", query: "notes" }]]);
+  const compare = context("GET", "/api/courses/_1_1/history/example-run/compare?path=notes%2F%3Cexample%3E.txt");
+  assert.equal(await controller.handle(compare), true);
+  assert.deepEqual(compare.response.json(), { comparison: "identical" });
+  assert.deepEqual(calls.at(-1), ["compare", "_1_1", "example-run", "notes/<example>.txt"]);
+  assert.equal(await controller.handle(context("POST", "/api/courses/_1_1/history/example-run/compare")), false);
   assert.equal(await controller.handle(context("POST", "/api/courses/_1_1/history/example-run")), false);
   assert.equal(await controller.handle(context("GET", "/api/courses/_1_1/history/a%2Fb")), false);
 });

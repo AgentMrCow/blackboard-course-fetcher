@@ -172,8 +172,12 @@ class ArchiveService {
     return this.archiveRepository.listCourseHistory(this.getCourseRecord(courseId));
   }
 
-  getHistoryRun(courseId, runId) {
-    return this.archiveRepository.readCourseHistoryRun(this.getCourseRecord(courseId), runId);
+  getHistoryRun(courseId, runId, options) {
+    return this.archiveRepository.readCourseHistoryRun(this.getCourseRecord(courseId), runId, options);
+  }
+
+  compareHistoryFile(courseId, runId, relativePath) {
+    return this.archiveRepository.compareCourseHistoryFile(this.getCourseRecord(courseId), runId, relativePath);
   }
 
   readFileText(courseId, relativePath, fallback = "") {

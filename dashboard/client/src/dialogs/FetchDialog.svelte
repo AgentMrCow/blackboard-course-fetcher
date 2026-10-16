@@ -3,7 +3,7 @@
   import Icon from "../components/Icon.svelte";
   import Modal from "../components/Modal.svelte";
   import StatusBadge from "../components/StatusBadge.svelte";
-  import { appState, changeState, reportError, startFetch } from "../lib/controller";
+  import { appState, closeFetch, reportError, startFetch } from "../lib/controller";
   import { formatBytes } from "../lib/format";
 
   let mode = "full";
@@ -11,9 +11,9 @@
   let attachmentConcurrency = 2;
   let reuseValidatedCache = false;
   let confirmFull = false;
-  let submitting = false;
   let previousIds = "";
 
+  $: submitting = $appState.fetchSubmitting;
   $: settings = $appState.bootstrap?.settings || {};
   $: courses = ($appState.bootstrap?.inventory.courses || []).filter((course) => $appState.fetchCourseIds.includes(course.id));
   $: ids = $appState.fetchCourseIds.join(",");
@@ -25,7 +25,6 @@
     attachmentConcurrency = settings.attachmentConcurrency || 2;
     reuseValidatedCache = Boolean(settings.reuseValidatedCache || courses.some((course) => course.archive.exists));
     confirmFull = false;
-    submitting = false;
   }
   $: freeBytes = Number($appState.bootstrap?.system?.disk?.freeBytes);
   $: hasDiskReading = Number.isFinite(freeBytes);
@@ -43,22 +42,19 @@
 
   async function submit() {
     if (submitDisabled) return;
-    submitting = true;
     try {
       await startFetch({ mode, courseConcurrency, attachmentConcurrency, reuseValidatedCache, confirmFull });
     } catch (error) {
       reportError(error);
-    } finally {
-      submitting = false;
     }
   }
 </script>
 
-<Modal open={$appState.fetchOpen} className="fetch-dialog" labelledby="fetch-title" close={() => changeState((state) => state.fetchOpen = false)}>
+<Modal open={$appState.fetchOpen} className="fetch-dialog" labelledby="fetch-title" close={closeFetch}>
   <form onsubmit={(event) => { event.preventDefault(); submit(); }}>
     <div class="dialog-header fetch-dialog-header">
       <div class="fetch-dialog-title"><span class="fetch-title-icon"><Icon name="hard-drive-download" /></span><span><span class="eyebrow">Archive operation</span><h2 id="fetch-title">Start fetch</h2><small>{courses.length} {courses.length === 1 ? "course" : "courses"} selected</small></span></div>
-      <button class="icon-button" type="button" onclick={() => changeState((state) => state.fetchOpen = false)} title="Close" aria-label="Close"><Icon name="x" /></button>
+      <button class="icon-button" type="button" onclick={closeFetch} title="Close" aria-label="Close"><Icon name="x" /></button>
     </div>
     <div id="fetch-dialog-body">
       <section class="fetch-section" aria-labelledby="fetch-courses-title">
@@ -108,6 +104,10 @@
         <label class="fetch-confirmation"><input type="checkbox" bind:checked={confirmFull} /><span><strong>Confirm full download for {courses.length} courses</strong><small>This batch can use substantial bandwidth and storage.</small></span></label>
       {/if}
 
+      {#if submitting}
+        <div class="fetch-notice info" role="status"><Icon name="refresh-cw" /><span><strong>A fetch request is being submitted</strong><small>Wait for its result before starting another batch. Closing this dialog does not cancel that request.</small></span></div>
+      {/if}
+
       <div class="fetch-notice" class:warning={mode === "full"} class:info={mode !== "full"}>
         <Icon name={mode === "full" ? "triangle-alert" : "info"} />
         <span>
@@ -116,6 +116,6 @@
         </span>
       </div>
     </div>
-    <div class="dialog-footer fetch-dialog-footer"><span class="fetch-footer-summary"><strong>{courses.length}</strong> {courses.length === 1 ? "course" : "courses"} · {mode === "full" ? "Full archive" : "Placeholder"}</span><span class="fetch-footer-actions"><button class="button secondary" type="button" onclick={() => changeState((state) => state.fetchOpen = false)}>Cancel</button><button class="button primary" type="submit" disabled={submitDisabled}><Icon name={submitting ? "refresh-cw" : "download"} /><span>{submitting ? "Starting" : courses.length > 1 ? "Start batch" : "Start fetch"}</span></button></span></div>
+    <div class="dialog-footer fetch-dialog-footer"><span class="fetch-footer-summary"><strong>{courses.length}</strong> {courses.length === 1 ? "course" : "courses"} · {mode === "full" ? "Full archive" : "Placeholder"}</span><span class="fetch-footer-actions"><button class="button secondary" type="button" onclick={closeFetch}>{submitting ? "Close" : "Cancel"}</button><button class="button primary" type="submit" disabled={submitDisabled}><Icon name={submitting ? "refresh-cw" : "download"} /><span>{submitting ? "Request pending" : courses.length > 1 ? "Start batch" : "Start fetch"}</span></button></span></div>
   </form>
 </Modal>

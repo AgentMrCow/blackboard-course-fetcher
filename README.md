@@ -134,6 +134,9 @@ validated cache, or cancel it.
 Open an archived course to use the local workspace. The tabs combine course
 content, assessments, grades, announcements, calendar entries, communication,
 people, files, and archive health without returning to Blackboard.
+On smaller screens, use **Course section** to choose any section without
+scrolling through the tabs. The mobile navigation supports keyboard focus,
+Escape to close, and returning focus to its menu button.
 
 ![Finished course workspace with upcoming work, grades, announcements, and files](docs/assets/tutorial/07-course-workspace.png)
 
@@ -149,12 +152,20 @@ additional local representations maintained by the fetcher.
 #### 9. Inspect Previous File Versions
 
 Open a course's **Backup history** tab to browse files preserved before a refresh
-replaced them. Select a run, filter by original path, and preview or download a
-saved file. Missing, changed, and unsafe entries have explicit status labels.
-Viewing a backup does not replace the current archive; the recovery guidance
-explains how to copy selected files back manually.
+replaced them. Select a run, filter by original path, and browse pages of up to
+100 files. Missing, changed, and unsafe entries have explicit status labels.
+Use **Compare** to inspect the saved version beside the current file, see text
+changes, and preview whether copying it back would replace or recreate a file.
+Both versions can be downloaded when available. Comparison and recovery previews
+are read-only; the recovery guidance explains how to copy selected files back manually.
+
+The storage summary totals the records in the listed backup journals, including
+repeated versions. These recorded byte counts can differ from current disk use
+when files have changed or been removed.
 
 ![Backup history showing saved refreshes, original paths, and file actions](docs/assets/tutorial/09-backup-history.png)
+
+![Saved and current file comparison with text differences and a read-only recovery preview](docs/assets/tutorial/10-backup-comparison.png)
 
 The dashboard client is built with Svelte, Vite, and TypeScript. A production
 build is included under `dashboard/public`, so ordinary users can run the local
@@ -193,6 +204,10 @@ The setup guide in the dashboard walks through these steps:
 4. Start placeholder or full fetches and monitor each course's phase, current
    file, transfer counts, estimated finish time, and recent output.
 
+**Settings → Manage sign-in** opens the same sign-in step, including saving and
+verifying the session. Changing the Blackboard URL or storage-state path clears
+the previous validation result; check the saved session again for the new settings.
+
 Running or queued courses can be paused, resumed, or cancelled separately. On
 POSIX systems a running process is suspended in place. On Windows, pause stops
 the process and resume starts a repair run. Interrupted, failed, incomplete, and
@@ -210,13 +225,24 @@ HTML, text, JSON, URL, placeholder, and unresolved records can be previewed loca
 Office and archive files remain available through the browser's open/download
 action. A background index keeps file paths and the contents of archived text,
 JSON, and URL files searchable without delaying the initial page load. Archived
-HTML previews are sandboxed and cannot load external network resources.
+documents, including HTML and SVG, are served with a sandbox policy that blocks
+scripts and external network resources even when opened directly in a new tab.
+Missing or unreadable files return an error, and an interrupted file stream ends
+its own response without taking down the dashboard.
+
+The full **Calendar** lets you select a day or expand its **+N more** button to
+see every saved item. Its agenda separates **Upcoming**, **Overdue**, and **All
+archived dates**, with **Show more** for longer lists. The compact mobile calendar
+opens the same complete day details.
 
 The dashboard reports local-server disconnections separately from Blackboard
 session status and refreshes its state when the event connection returns.
 Requests have deadlines, outdated search and detail responses are ignored, and
-failed file-list loads offer an explicit retry. A timed-out fetch request can
-still be running on the server, so check Fetch activity before starting another.
+failed file-list loads offer an explicit retry. An indexing failure displays its
+reason and offers **Rebuild index**. Delayed fetch responses update Fetch activity
+without clearing newer selections or closing a subsequently opened dialog.
+A timed-out fetch request can still be running on the server, so check Fetch
+activity before starting another.
 
 The dashboard displays free space on the archive drive and repeats it before a
 full fetch. Full mode can consume substantial storage, so clear space before a
@@ -381,9 +407,19 @@ to the run's history when one exists. Backups are available in the course's
 **Backup history** tab and excluded from ordinary file listings and search.
 They are never automatically pruned, so they use additional disk space.
 
-History browsing checks file presence, containment, and recorded size; it does
-not rehash every backup. Bounded reads keep large histories responsive, and the
-dashboard reports when only part of an index or history is displayed.
+History lists read journal summaries asynchronously. File filtering and paging
+happen on the server, and presence, containment, and recorded-size checks inspect
+only the requested page. These availability checks do not rehash every backup.
+The reader displays up to 100 runs from the first 1,000 inspected directory
+entries and up to 2,000 records per journal, with explicit notices when limited.
+
+An individual **Compare** request computes full SHA-256 hashes for files up to
+2 MiB each and checks the saved file against its journal. Larger files receive
+size-only comparisons; matching sizes alone do not establish matching contents.
+Supported UTF-8 text previews include at most the first 128 KiB per file, with
+additional line and character limits in the displayed difference. Invalid UTF-8
+and binary data remain downloadable without a text difference. The preview shows
+the saved source and original destination but never writes to either file.
 
 This is a file replacement history, not a whole-course transaction: a failed run
 can leave a mixture of old and new exports. To recover, stop fetching that course,
@@ -629,10 +665,12 @@ npx playwright install chromium
 npm run test:browser
 ```
 
-These checks serve built assets with synthetic API responses and require no
-Blackboard session, course archive, or running dashboard. They cover backup
-previews, explicit retries, reconnects, selection rules, keyboard navigation,
-and desktop, tablet, and mobile layouts. Screenshots are saved under the ignored
+These checks serve built assets with synthetic API responses and temporary test
+files, and require no Blackboard session, personal archive, or running dashboard. They cover backup
+comparison and paging, explicit retries, reconnects, selection rules, calendar
+expansion, keyboard navigation, and desktop, tablet, and mobile layouts. Real HTTP
+checks verify SVG/HTML script isolation and PDF preview under the archive policy.
+Screenshots are saved under the ignored
 `test/artifacts/dashboard-smoke/` directory. GitHub Actions also runs these checks
 on Node.js 24.
 

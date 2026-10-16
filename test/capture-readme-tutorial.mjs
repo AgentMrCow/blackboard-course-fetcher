@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { chromium } from "playwright";
-import { bootstrap, courseDetail, filePage, runningBatch } from "./fixtures/dashboard.mjs";
+import { bootstrap, backupHistory, courseDetail, filePage, runningBatch } from "./fixtures/dashboard.mjs";
 import { startStaticDashboard } from "./helpers/dashboard-static-server.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -14,6 +14,7 @@ const artifactDirectory = path.join(projectRoot, "test", "artifacts", "readme-tu
 let dashboardUrl = process.env.DASHBOARD_URL;
 
 async function installApiFixtures(page) {
+  const history = backupHistory();
   await page.route("**/api/**", (route) => route.fulfill({
     status: 404, contentType: "application/json", body: JSON.stringify({ error: "No synthetic fixture for this route" }),
   }));
@@ -42,6 +43,11 @@ async function installApiFixtures(page) {
     contentType: "application/json",
     body: JSON.stringify(courseDetail),
   }));
+  await page.route("**/api/courses/_demo_design_1/history**", (route) => {
+    const url = new URL(route.request().url());
+    const data = url.pathname.endsWith("/compare") ? history.comparison : url.pathname.endsWith("/history") ? history.list : history.detail;
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+  });
 }
 
 async function createContext(browser, options = {}) {
@@ -74,6 +80,8 @@ async function pause(page, milliseconds = 450) {
 }
 
 async function screenshot(page, name) {
+  const viewport = page.viewportSize();
+  await page.mouse.move(viewport.width - 1, viewport.height - 1);
   await pause(page, 250);
   await page.screenshot({
     path: path.join(outputDirectory, name),
@@ -118,6 +126,13 @@ async function captureScreenshots(browser) {
   await page.getByRole("heading", { name: "Files" }).waitFor();
   await page.getByText("Studio brief.pdf", { exact: true }).waitFor();
   await screenshot(page, "08-files.png");
+
+  await page.goto(`${dashboardUrl}/#/course/_demo_design_1/history`);
+  await page.getByRole("button", { name: "Compare saved gradebook.json", exact: true }).waitFor();
+  await screenshot(page, "09-backup-history.png");
+  await page.getByRole("button", { name: "Compare saved gradebook.json", exact: true }).click();
+  await page.getByText("The current and saved versions differ", { exact: true }).waitFor();
+  await screenshot(page, "10-backup-comparison.png");
 
   await context.close();
 }

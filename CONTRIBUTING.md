@@ -65,6 +65,12 @@ npm run check:client
 npm run dashboard:build
 ```
 
+Run `npm run test:browser` against that build for interaction changes. Its
+synthetic checks cover mobile drawer focus and breakpoint transitions, course
+section selection, calendar expansion, and backup comparison and pagination.
+Keep archived HTML/SVG content untrusted in both embedded and direct navigation;
+security fixtures must remain synthetic.
+
 To refresh the README walkthrough after building the dashboard:
 
 ```bash

@@ -67,15 +67,19 @@ test("archive history queries use inventory-validated repository records without
   const repository = memoryArchiveRepository();
   const calls = [];
   repository.listCourseHistory = (course) => { calls.push(["list", course.id]); return { runs: [], truncated: false, warnings: [] }; };
-  repository.readCourseHistoryRun = (course, runId) => { calls.push(["run", course.id, runId]); return { id: runId, files: [] }; };
+  repository.readCourseHistoryRun = (course, runId, options) => { calls.push(["run", course.id, runId, options]); return { id: runId, files: [] }; };
+  repository.compareCourseHistoryFile = (course, runId, file) => { calls.push(["compare", course.id, runId, file]); return { comparison: "identical" }; };
   const service = new ArchiveService({ archiveRepository: repository });
   assert.deepEqual(service.getHistory("_1_1"), { runs: [], truncated: false, warnings: [] });
-  assert.deepEqual(service.getHistoryRun("_1_1", "example-run"), { id: "example-run", files: [] });
+  assert.deepEqual(service.getHistoryRun("_1_1", "example-run", { offset: 2, limit: 3, query: "notes" }), { id: "example-run", files: [] });
   service.getHistory("_1_1");
-  assert.deepEqual(calls, [["list", "_1_1"], ["run", "_1_1", "example-run"], ["list", "_1_1"]]);
+  assert.deepEqual(calls, [["list", "_1_1"], ["run", "_1_1", "example-run", { offset: 2, limit: 3, query: "notes" }], ["list", "_1_1"]]);
+  assert.deepEqual(service.compareHistoryFile("_1_1", "example-run", "notes.txt"), { comparison: "identical" });
+  assert.deepEqual(calls.at(-1), ["compare", "_1_1", "example-run", "notes.txt"]);
   assert.throws(() => service.getHistory("missing-course"), (error) => error.statusCode === 404);
   assert.throws(() => service.getHistoryRun("missing-course", "example-run"), (error) => error.statusCode === 404);
-  assert.equal(calls.length, 3);
+  assert.throws(() => service.compareHistoryFile("missing-course", "example-run", "notes.txt"), (error) => error.statusCode === 404);
+  assert.equal(calls.length, 4);
 });
 
 test("archive query service enriches inventory through the repository port", () => {

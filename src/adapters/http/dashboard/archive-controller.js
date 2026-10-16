@@ -46,21 +46,29 @@ class ArchiveHttpController {
     }
     match = pathname.match(/^\/api\/courses\/([^/]+)\/history$/);
     if (match && method === "GET") {
-      sendJson(response, 200, this.workspace.courseHistory(match[1]));
+      sendJson(response, 200, await this.workspace.courseHistory(match[1]));
       return true;
     }
     match = pathname.match(/^\/api\/courses\/([^/]+)\/history\/([^/]+)$/);
     if (match && method === "GET") {
-      sendJson(response, 200, this.workspace.courseHistoryRun(match[1], match[2]));
+      sendJson(response, 200, await this.workspace.courseHistoryRun(match[1], match[2], {
+        offset: url.searchParams.get("offset"), limit: url.searchParams.get("limit"), query: url.searchParams.get("q"),
+      }));
+      return true;
+    }
+    match = pathname.match(/^\/api\/courses\/([^/]+)\/history\/([^/]+)\/compare$/);
+    if (match && method === "GET") {
+      sendJson(response, 200, await this.workspace.compareCourseHistoryFile(match[1], match[2], url.searchParams.get("path")));
       return true;
     }
     match = pathname.match(/^\/api\/courses\/([^/]+)\/file$/);
     if (match && ["GET", "HEAD"].includes(method)) {
       const resolved = this.workspace.resolveArchiveFile(match[1], url.searchParams.get("path"));
-      this.serveFile({
+      await this.serveFile({
         request,
         response,
         file: resolved.file,
+        validateFile: () => this.workspace.resolveArchiveFile(match[1], url.searchParams.get("path")).file,
         download: url.searchParams.get("download") === "1",
         mimeType,
       });

@@ -157,8 +157,12 @@ class DashboardServer {
     return this.archiveService.getHistory(courseId);
   }
 
-  courseHistoryRun(courseId, runId) {
-    return this.archiveService.getHistoryRun(courseId, runId);
+  courseHistoryRun(courseId, runId, options) {
+    return this.archiveService.getHistoryRun(courseId, runId, options);
+  }
+
+  compareCourseHistoryFile(courseId, runId, relativePath) {
+    return this.archiveService.compareHistoryFile(courseId, runId, relativePath);
   }
 
   resolveArchiveFile(courseId, relativePath) {

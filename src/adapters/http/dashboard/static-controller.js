@@ -14,11 +14,11 @@ class StaticHttpController {
     if (pathname.startsWith("/assets/")) {
       const file = path.resolve(this.paths.publicDirectory, pathname.slice(1));
       if (!file.startsWith(`${this.paths.publicDirectory}${path.sep}`)) throw httpError(400, "Invalid asset path");
-      this.serve(file, response, false);
+      await this.serve(file, response, false);
       return true;
     }
     if (request.method === "GET") {
-      this.serve(path.join(this.paths.publicDirectory, "index.html"), response, false);
+      await this.serve(path.join(this.paths.publicDirectory, "index.html"), response, false);
       return true;
     }
     return false;

@@ -76,6 +76,8 @@ export interface ArchiveHistoryFile {
 
 export interface ArchiveHistoryList {
   runs: ArchiveHistoryRun[];
+  recordedBytes: number | null;
+  recordedFiles: number;
   truncated: boolean;
   warnings: string[];
 }
@@ -83,6 +85,29 @@ export interface ArchiveHistoryList {
 export interface ArchiveHistoryDetail extends ArchiveHistoryRun {
   files: ArchiveHistoryFile[];
   truncated: boolean;
+  offset: number;
+  limit: number;
+  total: number;
+  hasMore: boolean;
+}
+
+export interface ArchiveComparisonFile {
+  status: "available" | "missing" | "unsafe" | "unreadable" | "changed";
+  size: number | null;
+  modifiedAt: string | null;
+  sha256: string | null;
+  text: string | null;
+  textTruncated: boolean;
+}
+
+export interface ArchiveComparison {
+  path: string;
+  backupPath: string | null;
+  recorded: { size: number; sha256: string; preservedAt: string | null };
+  saved: ArchiveComparisonFile;
+  current: ArchiveComparisonFile;
+  comparison: "identical" | "different" | "missing-current" | "unavailable" | "metadata-only";
+  warnings: string[];
 }
 
 export interface FetchTask extends JsonRecord {
@@ -209,6 +234,7 @@ export interface AppState {
   setupOpen: boolean;
   setupStep: number;
   fetchOpen: boolean;
+  fetchSubmitting: boolean;
   fetchCourseIds: string[];
   searchOpen: boolean;
   searchQuery: string;

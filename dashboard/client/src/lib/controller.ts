@@ -8,6 +8,8 @@ let fileLoadSequence = 0;
 let searchSequence = 0;
 let bootstrapSequence = 0;
 let detailOpenSequence = 0;
+let fetchDialogSequence = 0;
+let authRequestSequence = 0;
 const courseRequests = new Map<string, { token: symbol; request: Promise<CourseDetail> }>();
 const liveRevisions = new Map<keyof Bootstrap, number>();
 
@@ -49,6 +51,16 @@ function invalidateArchiveViews(state: AppState): void {
   state.allFiles = null;
   state.filesLoading = false;
   state.filesError = "";
+}
+
+function applyFileIndexFailure(state: AppState): boolean {
+  const index = state.bootstrap?.fileIndex;
+  if (index?.status !== "failed") return false;
+  fileLoadSequence += 1;
+  state.filesLoading = false;
+  state.filesError = index.message || "The local file index could not be built. Retry to rebuild it.";
+  if (state.allFiles) state.allFiles = { ...state.allFiles, indexing: false, status: index };
+  return true;
 }
 
 export function activeBatch(bootstrap = readState().bootstrap): FetchBatch | null {
@@ -121,6 +133,7 @@ export async function refreshBootstrap(showSuccess = false): Promise<void> {
     state.bootstrap = bootstrap;
     pruneCourseSelection(state);
     invalidateArchiveViews(state);
+    applyFileIndexFailure(state);
     state.loading = false;
     state.fatalError = "";
   });
@@ -143,6 +156,10 @@ function fileListParameters(): URLSearchParams {
 
 export async function loadAllFiles(force = false): Promise<void> {
   const state = readState();
+  if (state.bootstrap?.fileIndex?.status === "failed") {
+    changeState(applyFileIndexFailure);
+    return;
+  }
   if (!force && (state.filesLoading || state.allFiles)) return;
   const sequence = ++fileLoadSequence;
   changeState((current) => { current.filesLoading = true; current.filesError = ""; });
@@ -166,6 +183,30 @@ export async function loadAllFiles(force = false): Promise<void> {
   } finally {
     if (sequence === fileLoadSequence) changeState((current) => current.filesLoading = false);
   }
+}
+
+export async function refreshFileIndex(): Promise<void> {
+  fileLoadSequence += 1;
+  changeState((state) => {
+    state.filePage = 0;
+    state.filesLoading = true;
+    state.filesError = "";
+  });
+  try {
+    await refreshBootstrap(true);
+    await loadAllFiles();
+  } catch (error) {
+    changeState((state) => {
+      state.filesLoading = false;
+      state.filesError = error instanceof Error ? error.message : String(error);
+    });
+    throw error;
+  }
+}
+
+export async function retryFiles(): Promise<void> {
+  if (readState().bootstrap?.fileIndex?.status === "failed") await refreshFileIndex();
+  else await loadAllFiles(true);
 }
 
 export function setFileFilters(values: Partial<{ query: string; preview: string; courseId: string; scope: FileScope }>): void {
@@ -219,27 +260,54 @@ export function openFetch(courseIds: string[]): void {
     return;
   }
   changeState((current) => {
+    fetchDialogSequence += 1;
     current.fetchCourseIds = unique;
     current.fetchOpen = true;
   });
 }
 
+export function closeFetch(): void {
+  fetchDialogSequence += 1;
+  changeState((state) => state.fetchOpen = false);
+}
+
 export async function startFetch(payload: JsonRecord): Promise<void> {
   const state = readState();
-  const batch = await api<FetchBatch>("/api/fetch", {
-    method: "POST",
-    body: { ...payload, courseIds: state.fetchCourseIds },
-  });
-  markLiveUpdate("jobs");
-  changeState((current) => {
-    if (current.bootstrap && !current.bootstrap.jobs.some((job) => job.id === batch.id)) {
-      current.bootstrap.jobs.unshift(batch);
-    }
-    current.selectedCourses.clear();
-    current.fetchOpen = false;
-  });
-  navigate("activity");
-  showToast("Fetch batch started.", "success");
+  if (state.fetchSubmitting) throw new Error("A fetch request is already being submitted. Wait for its result before starting another.");
+  const sequence = fetchDialogSequence;
+  const route = state.route;
+  const hash = window.location?.hash;
+  const courseIds = [...state.fetchCourseIds];
+  const selection = new Set(state.selectedCourses);
+  changeState((current) => current.fetchSubmitting = true);
+  try {
+    const batch = await api<FetchBatch>("/api/fetch", {
+      method: "POST",
+      body: { ...payload, courseIds },
+    });
+    const current = readState();
+    const ownsDialog = sequence === fetchDialogSequence && current.fetchOpen
+      && current.route === route && window.location?.hash === hash;
+    markLiveUpdate("jobs");
+    changeState((current) => {
+      if (current.bootstrap && !current.bootstrap.jobs.some((job) => job.id === batch.id)) {
+        current.bootstrap.jobs.unshift(batch);
+      }
+      if (!ownsDialog) return;
+      if (selection.size === current.selectedCourses.size && [...selection].every((id) => current.selectedCourses.has(id))) {
+        for (const id of courseIds) current.selectedCourses.delete(id);
+      }
+      current.fetchOpen = false;
+    });
+    if (ownsDialog) navigate("activity");
+    showToast("Fetch batch started. View its progress in Fetch activity.", "success");
+  } finally {
+    changeState((current) => current.fetchSubmitting = false);
+  }
+}
+
+function authSettingsKey(settings = readState().bootstrap?.settings): string {
+  return JSON.stringify([settings?.blackboardBase, settings?.stateFile]);
 }
 
 export async function saveSettings(form: HTMLFormElement): Promise<void> {
@@ -256,14 +324,24 @@ export async function saveSettings(form: HTMLFormElement): Promise<void> {
   });
   markLiveUpdate("settings");
   changeState((state) => {
-    if (state.bootstrap) state.bootstrap.settings = settings;
+    if (!state.bootstrap) return;
+    if (authSettingsKey() !== authSettingsKey(settings)) {
+      authRequestSequence += 1;
+      markLiveUpdate("auth");
+      state.bootstrap.auth = { ...state.bootstrap.auth, status: "idle", validation: null, message: "Connection settings changed. Check the saved session or sign in again." };
+    }
+    state.bootstrap.settings = settings;
   });
   await refreshBootstrap();
   showToast("Dashboard settings saved.", "success");
 }
 
 export async function checkAuth(): Promise<void> {
+  const sequence = ++authRequestSequence;
+  const settingsKey = authSettingsKey();
+  const revision = liveRevisions.get("auth");
   const auth = await api<JsonRecord>("/api/auth/check", { method: "POST", timeoutMs: 90_000 });
+  if (sequence !== authRequestSequence || settingsKey !== authSettingsKey() || revision !== liveRevisions.get("auth")) return;
   markLiveUpdate("auth");
   changeState((state) => {
     if (state.bootstrap) state.bootstrap.auth = auth;
@@ -272,7 +350,11 @@ export async function checkAuth(): Promise<void> {
 }
 
 export async function authAction(action: "start" | "save" | "cancel"): Promise<void> {
+  const sequence = ++authRequestSequence;
+  const settingsKey = authSettingsKey();
+  const revision = liveRevisions.get("auth");
   const auth = await api<JsonRecord>(`/api/auth/${action}`, { method: "POST" });
+  if (sequence !== authRequestSequence || settingsKey !== authSettingsKey() || revision !== liveRevisions.get("auth")) return;
   markLiveUpdate("auth");
   changeState((state) => {
     if (state.bootstrap) state.bootstrap.auth = auth;
@@ -572,6 +654,12 @@ function connectEvents(): void {
     changeState((state) => {
       if (!state.bootstrap) return;
       state.bootstrap.fileIndex = index;
+      if (applyFileIndexFailure(state)) return;
+      if (index.status === "running" && state.filesError) {
+        state.filesError = "";
+        state.allFiles = null;
+      }
+      if (state.allFiles?.indexing) state.allFiles = { ...state.allFiles, status: index };
       if (index.status === "complete") {
         fileLoadSequence += 1;
         state.allFiles = null;

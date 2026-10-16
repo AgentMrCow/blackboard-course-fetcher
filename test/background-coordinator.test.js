@@ -117,6 +117,83 @@ test("authentication coordinator cancels the active browser without exposing ses
   assert.equal(JSON.stringify(snapshot).includes("cookieValue"), false);
 });
 
+for (const changed of [
+  { blackboardBase: "https://another.example.edu" },
+  { stateFile: "/private/replacement.json" },
+]) {
+  test(`authentication changes invalidate the verified session: ${Object.keys(changed)[0]}`, async () => {
+    const coordinator = new AuthenticationCoordinator({
+      runner: authenticationRunner(), sessionGateway: sessionGateway(), settings: SETTINGS,
+    });
+    await coordinator.check();
+    const updates = [];
+    coordinator.on("update", (snapshot) => updates.push(snapshot));
+    coordinator.setSettings({ ...SETTINGS, ...changed });
+    assert.equal(coordinator.snapshot().status, "idle");
+    assert.equal(coordinator.snapshot().validation, null);
+    assert.match(coordinator.snapshot().message, /settings changed/);
+    assert.equal(updates.length, 1);
+  });
+}
+
+test("storage and concurrency settings preserve a verified session", async () => {
+  const coordinator = new AuthenticationCoordinator({
+    runner: authenticationRunner(), sessionGateway: sessionGateway(), settings: SETTINGS,
+  });
+  await coordinator.check();
+  coordinator.setSettings({ ...SETTINGS, archiveRoot: "/other/archive", courseConcurrency: 2 });
+  assert.equal(coordinator.snapshot().status, "connected");
+  assert.equal(coordinator.snapshot().validation.valid, true);
+});
+
+for (const outcome of ["success", "failure"]) {
+  test(`an old session check ${outcome} cannot overwrite changed connection settings`, async () => {
+    let resolve;
+    let reject;
+    const pending = new Promise((done, fail) => { resolve = done; reject = fail; });
+    const gateway = { ...sessionGateway(), validate: () => pending };
+    const coordinator = new AuthenticationCoordinator({ runner: authenticationRunner(), sessionGateway: gateway, settings: SETTINGS });
+    const checking = coordinator.check();
+    coordinator.setSettings({ ...SETTINGS, stateFile: "/private/new-state.json" });
+    if (outcome === "success") resolve({ valid: true, message: "Old session valid" });
+    else reject(new Error("Old session unavailable"));
+    const result = await checking;
+    assert.equal(result.status, "idle");
+    assert.equal(result.validation, null);
+    assert.match(result.message, /settings changed/);
+  });
+}
+
+test("a newer check wins when session validations complete out of order", async () => {
+  const pending = [];
+  const coordinator = new AuthenticationCoordinator({
+    runner: authenticationRunner(), settings: SETTINGS,
+    sessionGateway: { ...sessionGateway(), validate: () => new Promise((resolve) => pending.push(resolve)) },
+  });
+  const first = coordinator.check();
+  const second = coordinator.check();
+  pending[1]({ valid: false, message: "Session expired" });
+  await second;
+  pending[0]({ valid: true, message: "Old session valid" });
+  await first;
+  assert.equal(coordinator.snapshot().validation.valid, false);
+  assert.equal(coordinator.snapshot().message, "Session expired");
+});
+
+test("a saved-session check cannot replace a newly opened sign-in flow", async () => {
+  let resolve;
+  const coordinator = new AuthenticationCoordinator({
+    runner: authenticationRunner(), settings: SETTINGS,
+    sessionGateway: { ...sessionGateway(), validate: () => new Promise((done) => { resolve = done; }) },
+  });
+  const checking = coordinator.check();
+  coordinator.start();
+  resolve({ valid: true, message: "Old session valid" });
+  await checking;
+  assert.equal(coordinator.snapshot().status, "starting");
+  assert.equal(coordinator.snapshot().validation, null);
+});
+
 test("inventory coordinator validates session state and reports successful refresh", () => {
   const runner = inventoryRunner();
   const scheduler = controlledScheduler();

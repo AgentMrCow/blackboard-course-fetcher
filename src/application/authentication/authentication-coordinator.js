@@ -12,6 +12,7 @@ class AuthenticationCoordinator extends EventEmitter {
     this.sessionGateway = sessionGateway;
     this.settings = settings;
     this.worker = null;
+    this.validationSequence = 0;
     this.state = { status: "idle", message: null, startedAt: null, validation: null };
   }
 
@@ -24,7 +25,14 @@ class AuthenticationCoordinator extends EventEmitter {
   }
 
   setSettings(settings) {
+    const sessionChanged = this.settings.blackboardBase !== settings.blackboardBase
+      || this.settings.stateFile !== settings.stateFile;
     this.settings = settings;
+    if (sessionChanged) {
+      this.validationSequence += 1;
+      this.state = { status: "idle", message: "Connection settings changed. Check the saved session or sign in again.", startedAt: null, validation: null };
+      this.emitUpdate();
+    }
   }
 
   snapshot() {
@@ -38,7 +46,15 @@ class AuthenticationCoordinator extends EventEmitter {
   }
 
   async check() {
-    const validation = await this.sessionGateway.validate(this.settings);
+    const sequence = ++this.validationSequence;
+    let validation;
+    try {
+      validation = await this.sessionGateway.validate(this.settings);
+    } catch (error) {
+      if (sequence !== this.validationSequence) return this.snapshot();
+      throw error;
+    }
+    if (sequence !== this.validationSequence) return this.snapshot();
     this.state = {
       ...this.state,
       status: validation.valid ? "connected" : "idle",
@@ -51,6 +67,7 @@ class AuthenticationCoordinator extends EventEmitter {
   start() {
     if (this.worker) throw httpError(409, "A sign-in browser is already open");
     if (!this.settings.blackboardBase) throw httpError(400, "Set the Blackboard URL before signing in");
+    this.validationSequence += 1;
     this.state = {
       status: "starting",
       message: "Opening the official Blackboard sign-in page",
@@ -117,6 +134,7 @@ class AuthenticationCoordinator extends EventEmitter {
   }
 
   cancel() {
+    this.validationSequence += 1;
     if (this.worker) this.runner.cancel(this.worker);
     this.state = { status: "idle", message: "Sign-in was cancelled", startedAt: null, validation: null };
     return this.emitUpdate();
